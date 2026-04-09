@@ -149,5 +149,14 @@ python -m tingon_py.cli raw AA:BB:CC:DD:EE:FF 0A0101 --profile m2
 
 - Appliance devices use a TLV/spec protocol over `ee01/ee02/ee04` plus `cc01/cc02/cc03` for status queries.
 - Intimate devices reuse `ee01/ee02/ee04` but use a different command family (`0A..`, `0B..`).
-- The intimate family is documented in [PROTOCOL.md](C:\Users\seanh\Desktop\tingon\PROTOCOL.md).
 - BLE writes require the target device to be powered on and in range.
+
+## Screenshots
+
+Current local web UI examples:
+
+![TINGON M2 desktop](screenshots/webui-m2-desktop.png)
+
+![TINGON N1 desktop](screenshots/webui-n1-desktop.png)
+
+![XPOWER FJB2 desktop](screenshots/webui-fjb2-desktop.png)
