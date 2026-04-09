@@ -90,6 +90,18 @@ The detail views still have distinct support for `N2`. The fallback naming logic
 | `m1` | 10 | 2 | quantized dual output | 4 |
 | `m2` | 12 | 1 | position selector, custom range | 6 |
 
+### N2 Notes
+
+- profile `n2` uses the same base intimate packet family as `a1`, `n1`, `m1`, and `m2`
+- output 1 is presented as `vibration`
+- output 2 is presented as `electric_shock`
+- the app exposes three N2 selector states:
+  - `vibration`
+  - `electric_shock`
+  - `vibration_and_electric_shock`
+- dedicated selector assets exist for those three states in the React Native bundle
+- no N2-exclusive BLE opcode has been confirmed from the React Native layer
+
 ### Playback Behavior
 
 The original app also has a local playback scheduler:
@@ -148,6 +160,11 @@ Fields:
 - `40`: output 1
 - `41`: output 2
 - `vv`, `ww`: 1-byte output values
+
+N2 mapping:
+
+- `40` -> vibration
+- `41` -> electric shock
 
 ### Output Scaling
 
@@ -288,7 +305,19 @@ App-level N2 modes:
 - `electric_shock`
 - `vibration_and_electric_shock`
 
-These affect the UI/control model. No separate BLE command has been identified for them.
+Observed behavior:
+
+- the selector is rendered with dedicated N2-only assets in the React Native bundle
+- the main BLE writes for N2 still use the shared intimate commands:
+  - `0A01` for preset/custom playback
+  - `0A02 40 vv 41 ww` for manual dual-output control
+  - `0A04` / `0B02` for custom slots
+- no separate N2 selector packet has been identified from the React Native control code
+
+Current interpretation:
+
+- the N2 selector changes the app's control mode and presentation
+- the underlying device control still appears to be the standard dual-channel intimate protocol
 
 ---
 

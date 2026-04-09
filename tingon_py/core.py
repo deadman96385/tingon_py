@@ -1272,7 +1272,7 @@ class TingonDevice:
         self.require_capability(CAP_N2_MODE)
         lookup = {label: idx for idx, label in IntimateProtocol.N2_MODE_LABELS.items()}
         if mode_name not in lookup:
-            raise ValueError(f"Unknown N2 mode '{mode_name}'")
+            raise ValueError(f"Unknown N2 selector '{mode_name}'")
         self._intimate_status.n2_mode = lookup[mode_name]
 
     async def intimate_query_custom(self, slot_id: int) -> list[dict[str, int]]:
@@ -1493,7 +1493,7 @@ async def cmd_n2_mode(args):
     dev = await connect_for_args(args)
     try:
         await dev.intimate_set_n2_mode(args.name)
-        print(f"N2 mode set to {args.name}")
+        print(f"N2 selector set to {args.name}")
     finally:
         await dev.disconnect()
 
@@ -1563,7 +1563,7 @@ async def cmd_interactive(args):
         if dev.has_capability(CAP_POSITION):
             print("  position front|middle|back|front_middle|middle_back|all")
         if dev.has_capability(CAP_N2_MODE):
-            print("  n2mode vibration|electric_shock|vibration_and_electric_shock")
+            print("  n2mode vibration|electric_shock|vibration_and_electric_shock  # local selector")
         if dev.has_capability(CAP_CUSTOM):
             print("  custom_get <32|33|34>")
             print("  custom_set <slot> <mode:sec> [mode:sec] ...")
@@ -1884,9 +1884,9 @@ Examples:
     p_position.add_argument("position", choices=sorted(IntimateProtocol.POSITION_BYTES.keys()), help="Position selector")
     add_profile_arg(p_position)
 
-    p_n2 = subparsers.add_parser("n2-mode", help="Set N2 mode family")
+    p_n2 = subparsers.add_parser("n2-mode", help="Set the local N2 selector")
     p_n2.add_argument("address", help="Device BLE address")
-    p_n2.add_argument("name", choices=list(IntimateProtocol.N2_MODE_LABELS.values()), help="N2 mode")
+    p_n2.add_argument("name", choices=list(IntimateProtocol.N2_MODE_LABELS.values()), help="N2 selector")
     add_profile_arg(p_n2)
 
     p_cget = subparsers.add_parser("custom-get", help="Read intimate custom slot")

@@ -459,6 +459,7 @@ function renderN2Modes(enabled, activeMode) {
         body: JSON.stringify({ name: modeName }),
       }).then(updateSessionFromApi).catch(reportError);
     });
+    button.title = "Local selector";
     els.n2ModeGrid.appendChild(button);
   }
 }
