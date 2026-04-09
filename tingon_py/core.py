@@ -97,7 +97,7 @@ class DeviceProfile(str, Enum):
         except ValueError:
             if fuzzy:
                 return cls._infer_from_name(raw)
-            raise ValueError(f"Unknown profile '{raw}'") from None
+            raise TingonProtocolError(f"Unknown profile '{raw}'") from None
 
     @classmethod
     def _infer_from_name(cls, name: str) -> Optional["DeviceProfile"]:
@@ -843,7 +843,7 @@ class TingonDevice:
     def require_capability(self, capability: str):
         if not self.has_capability(capability):
             prof = self._profile.value if self._profile else "unknown"
-            raise ValueError(f"Profile '{prof}' does not support '{capability}'")
+            raise TingonUnsupportedCapability(f"Profile '{prof}' does not support '{capability}'")
 
     @property
     def specs(self) -> dict[int, SpecDef]:
@@ -868,56 +868,18 @@ class TingonDevice:
     @staticmethod
     def _require_bleak():
         if BleakClient is None or BleakScanner is None:
-            raise RuntimeError("bleak is not installed. Install it with: pip install bleak")
+            raise TingonDependencyError("bleak is not installed. Install it with: pip install bleak")
 
     @staticmethod
-    async def scan(name_filter: str = "", timeout: float = 10.0) -> list[ScannedDevice]:
+    async def scan(
+        name_filter: str = "",
+        timeout: float = 10.0,
+        scanner=None,
+    ) -> list[ScannedDevice]:
         """Scan for TINGON BLE devices."""
-        TingonDevice._require_bleak()
-        found: dict[str, ScannedDevice] = {}
+        from .scanner import scan as scan_devices
 
-        def callback(device: BLEDevice, adv: AdvertisementData):
-            if name_filter and device.name and name_filter.lower() not in device.name.lower():
-                return
-            if not device.name:
-                return
-
-            sd = ScannedDevice(
-                address=device.address,
-                name=device.name or "Unknown",
-                rssi=adv.rssi,
-            )
-
-            # Parse manufacturer data
-            if adv.manufacturer_data:
-                for _company_id, mfr_data in adv.manufacturer_data.items():
-                    sd.raw_manufacturer_data = mfr_data
-                    sd.device_key = TingonEncryption.extract_device_key(mfr_data)
-                    if len(mfr_data) > 11:
-                        dev_type_byte = mfr_data[10]
-                        sub_version = mfr_data[11] if len(mfr_data) > 11 else 0
-                        if dev_type_byte == 0 and sub_version == 2:
-                            sd.device_type = DeviceType.FJB_SECOND
-                        elif dev_type_byte in (0, 1, 2, 3):
-                            sd.device_type = DeviceType(dev_type_byte)
-                    if len(mfr_data) >= 19:
-                        mac_bytes = mfr_data[13:19]
-                        sd.mac_from_adv = ":".join(f"{b:02X}" for b in mac_bytes)
-                    break
-
-            if sd.device_type is not None:
-                sd.profile = APPLIANCE_TYPE_TO_PROFILE[sd.device_type]
-            else:
-                sd.profile = DeviceProfile.parse(sd.name, fuzzy=True)
-
-            found[device.address] = sd
-
-        scanner = BleakScanner(detection_callback=callback)
-        await scanner.start()
-        await asyncio.sleep(timeout)
-        await scanner.stop()
-
-        return list(found.values())
+        return await scan_devices(scanner=scanner, name_filter=name_filter, timeout=timeout)
 
     # -- Connection --
 
@@ -935,32 +897,35 @@ class TingonDevice:
         if self._profile is not None and self.profile_meta and self.profile_meta.appliance_type is not None:
             self._device_type = self.profile_meta.appliance_type
         self._client = BleakClient(address)
-        await self._client.connect()
+        try:
+            await self._client.connect()
+        except Exception as exc:
+            raise TingonConnectionError(f"Failed to connect to {address}") from exc
 
         # Subscribe to notifications
         try:
             await self._client.start_notify(CHR_CMD_NOTIFY, self._cmd_notification_handler)
-        except Exception as e:
-            print(f"Warning: Could not subscribe to command notifications (ee04): {e}")
+        except Exception:
+            LOGGER.warning("Could not subscribe to command notifications (ee04)", exc_info=True)
 
         if self.is_appliance or self._profile is None:
             try:
                 await self._client.start_notify(CHR_QUERY_NOTIFY, self._query_notification_handler)
-            except Exception as e:
-                print(f"Warning: Could not subscribe to query notifications (cc03): {e}")
+            except Exception:
+                LOGGER.warning("Could not subscribe to query notifications (cc03)", exc_info=True)
 
-        print(f"Connected to {address}")
+        LOGGER.info("Connected to %s", address)
         if self.profile_meta is not None:
-            print(f"Profile: {self.profile_meta.display_name} ({self.profile_meta.category})")
+            LOGGER.info("Profile: %s (%s)", self.profile_meta.display_name, self.profile_meta.category)
         elif self._device_type is not None:
             category = "Dehumidifier" if self.is_dehumidifier else "Water Heater"
-            print(f"Device type: {self._device_type.name} ({category})")
+            LOGGER.info("Device type: %s (%s)", self._device_type.name, category)
 
     async def disconnect(self):
         """Disconnect from the device."""
         if self._client and self._client.is_connected:
             await self._client.disconnect()
-            print("Disconnected")
+            LOGGER.info("Disconnected from %s", self._address or "device")
         self._client = None
 
     # -- Notification handlers --
@@ -1034,7 +999,7 @@ class TingonDevice:
         try:
             await asyncio.wait_for(prov_event.wait(), timeout=30.0)
         except asyncio.TimeoutError:
-            print("Provisioning response timeout")
+            LOGGER.warning("Provisioning response timeout")
             return None
         finally:
             await self._client.stop_notify(CHR_PROV_NOTIFY)
@@ -1054,7 +1019,7 @@ class TingonDevice:
         try:
             await asyncio.wait_for(self._response_event.wait(), timeout=5.0)
         except asyncio.TimeoutError:
-            print("Command response timeout")
+            LOGGER.warning("Command response timeout")
             return None
 
         return TingonProtocol.parse_response(self._response_data, self.signed_specs)
@@ -1070,7 +1035,7 @@ class TingonDevice:
         try:
             await asyncio.wait_for(self._response_event.wait(), timeout=5.0)
         except asyncio.TimeoutError:
-            print("Command response timeout")
+            LOGGER.warning("Command response timeout")
             return None
 
         return TingonProtocol.parse_response(self._response_data, self.signed_specs)
@@ -1088,7 +1053,7 @@ class TingonDevice:
     async def query_specs(self, spec_ids: list[int]) -> Optional[dict]:
         """Query specific device properties."""
         if self.is_intimate:
-            raise ValueError("Spec queries are only supported for appliance profiles")
+            raise TingonUnsupportedCapability("Spec queries are only supported for appliance profiles")
         query_bytes = TingonProtocol.build_query(spec_ids)
         self._query_data = ""
         self._query_event.clear()
@@ -1098,7 +1063,7 @@ class TingonDevice:
         try:
             await asyncio.wait_for(self._query_event.wait(), timeout=5.0)
         except asyncio.TimeoutError:
-            print("Query response timeout")
+            LOGGER.warning("Query response timeout")
             return None
 
         return TingonProtocol.parse_response(self._query_data, self.signed_specs)
@@ -1207,7 +1172,7 @@ class TingonDevice:
     async def intimate_use_custom(self, slot_id: int):
         self.require_capability(CAP_CUSTOM)
         if slot_id not in (32, 33, 34):
-            raise ValueError("Custom slots must be 32, 33, or 34")
+            raise TingonProtocolError("Custom slots must be 32, 33, or 34")
         await self.send_raw_hex(IntimateProtocol.encode_mode(slot_id))
         self._intimate_status.play = True
         self._intimate_status.mode = 0
@@ -1255,7 +1220,7 @@ class TingonDevice:
         self.require_capability(CAP_POSITION)
         normalized = position.lower().replace("-", "_")
         if normalized not in IntimateProtocol.POSITION_BYTES:
-            raise ValueError(f"Unknown position '{position}'")
+            raise TingonProtocolError(f"Unknown position '{position}'")
         self._intimate_status.position = normalized
         await self.send_raw_hex(
             IntimateProtocol.encode_position_speed(normalized, self._intimate_status.motor1)
@@ -1272,13 +1237,13 @@ class TingonDevice:
         self.require_capability(CAP_N2_MODE)
         lookup = {label: idx for idx, label in IntimateProtocol.N2_MODE_LABELS.items()}
         if mode_name not in lookup:
-            raise ValueError(f"Unknown N2 selector '{mode_name}'")
+            raise TingonProtocolError(f"Unknown N2 selector '{mode_name}'")
         self._intimate_status.n2_mode = lookup[mode_name]
 
     async def intimate_query_custom(self, slot_id: int) -> list[dict[str, int]]:
         self.require_capability(CAP_CUSTOM)
         if slot_id not in (32, 33, 34):
-            raise ValueError("Custom slots must be 32, 33, or 34")
+            raise TingonProtocolError("Custom slots must be 32, 33, or 34")
         self._response_data = ""
         self._response_event.clear()
         await self.send_raw_hex(IntimateProtocol.encode_query_custom(slot_id))
@@ -1296,7 +1261,7 @@ class TingonDevice:
     async def intimate_set_custom(self, slot_id: int, items: list[tuple[int, int]]):
         self.require_capability(CAP_CUSTOM)
         if slot_id not in (32, 33, 34):
-            raise ValueError("Custom slots must be 32, 33, or 34")
+            raise TingonProtocolError("Custom slots must be 32, 33, or 34")
         await self.send_raw_hex(IntimateProtocol.encode_custom(slot_id, items))
         self._intimate_status.custom_slots[slot_id] = [
             {"mode": int(mode), "sec": int(sec)} for mode, sec in items
@@ -1336,8 +1301,8 @@ class TingonDevice:
                 json_str = bytes.fromhex(response_hex).decode("utf-8", errors="replace")
 
             return json.loads(json_str)
-        except (ValueError, json.JSONDecodeError) as e:
-            print(f"Failed to parse provisioning response: {e}")
+        except (ValueError, json.JSONDecodeError):
+            LOGGER.warning("Failed to parse provisioning response", exc_info=True)
             return None
 
 
@@ -1379,12 +1344,14 @@ def add_profile_arg(parser, required: bool = True):
 def resolve_profile_arg(args) -> DeviceProfile:
     profile = DeviceProfile.parse(getattr(args, "profile", None))
     if profile is None:
-        raise ValueError("--profile is required")
+        raise TingonProtocolError("--profile is required")
     return profile
 
 
-async def connect_for_args(args) -> TingonDevice:
-    dev = TingonDevice()
+async def connect_for_args(args):
+    from .client import TingonClient
+
+    dev = TingonClient()
     profile = resolve_profile_arg(args)
     meta = profile_info(profile)
     await dev.connect(args.address, device_type=meta.appliance_type, profile=profile)
@@ -1392,8 +1359,10 @@ async def connect_for_args(args) -> TingonDevice:
 
 
 async def cmd_scan(args):
+    from .scanner import scan as scan_devices
+
     print(f"Scanning for TINGON devices ({args.timeout}s)...")
-    devices = await TingonDevice.scan(name_filter=args.name or "", timeout=args.timeout)
+    devices = await scan_devices(name_filter=args.name or "", timeout=args.timeout)
     if not devices:
         print("No devices found.")
         return
@@ -1452,7 +1421,7 @@ async def cmd_mode(args):
         if dev.is_appliance:
             mode_val = BATHROOM_MODE_NAME_TO_VALUE.get(args.mode.lower())
             if mode_val is None:
-                raise ValueError("Unknown bathroom mode. Use: normal, kitchen, eco, season")
+                raise TingonProtocolError("Unknown bathroom mode. Use: normal, kitchen, eco, season")
             result = await dev.set_bathroom_mode(mode_val)
             print(f"Bathroom mode set to {args.mode}: {result}")
         else:

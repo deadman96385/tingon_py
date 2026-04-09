@@ -7,9 +7,21 @@ name = "tingon-py"
 version = "1.1.0"
 description = "Python tooling for TINGON BLE appliance and intimate devices"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
   "bleak",
+]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Home Automation",
+]
+
+[project.optional-dependencies]
+web = [
   "fastapi",
   "uvicorn",
 ]
@@ -17,6 +29,10 @@ dependencies = [
 [project.scripts]
 tingon = "tingon_py.cli:main"
 tingon-web = "tingon_py.webapp:main"
+
+[project.urls]
+Homepage = "https://github.com/deadman96385/tingon_py"
+Repository = "https://github.com/deadman96385/tingon_py"
 
 [tool.setuptools]
 packages = ["tingon_py"]

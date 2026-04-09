@@ -237,7 +237,7 @@ class DeviceSessionManager:
                 except Exception as exc:
                     raise HTTPException(status_code=400, detail=f"Mock connect failed: {exc}") from exc
             else:
-                device = TingonDevice()
+                device = TingonClient()
                 try:
                     await device.connect(address, profile=profile)
                 except Exception as exc:
@@ -440,7 +440,7 @@ class DeviceSessionManager:
     def _empty_session(self) -> dict:
         return {"connected": False, "device": None}
 
-    def _require_device_locked(self, capability: Optional[str] = None) -> TingonDevice | MockTingonDevice:
+    def _require_device_locked(self, capability: Optional[str] = None) -> TingonClient | MockTingonDevice:
         if self._device is None or self._session is None:
             raise HTTPException(status_code=400, detail="No active device session")
         if capability and not self._device.has_capability(capability):
@@ -461,7 +461,7 @@ class DeviceSessionManager:
         self._last_status_json = ""
         self._next_mode_change_at = None
 
-    async def _refresh_custom_locked(self, device: Optional[TingonDevice | MockTingonDevice] = None):
+    async def _refresh_custom_locked(self, device: Optional[TingonClient | MockTingonDevice] = None):
         device = device or self._require_device_locked(CAP_CUSTOM)
         if not device.has_capability(CAP_CUSTOM):
             return

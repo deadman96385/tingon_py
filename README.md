@@ -43,8 +43,42 @@ Intimate-device profiles:
 ## Requirements
 
 ```bash
-pip install bleak fastapi uvicorn
 pip install -e .
+pip install -e .[web]
+```
+
+Base installs include the BLE client only. The web UI dependencies are optional and only required for `tingon-web`.
+
+## Library Usage
+
+Supported public library surface:
+
+- `tingon_py.TingonClient`
+- `tingon_py.scan`
+- `tingon_py.DeviceProfile`
+- `tingon_py.profile_info`
+- `tingon_py.TingonError` and typed subclasses
+
+Example:
+
+```python
+import asyncio
+
+from tingon_py import DeviceProfile, TingonClient, scan
+
+
+async def main():
+    devices = await scan(timeout=5)
+    client = TingonClient()
+    await client.connect("AA:BB:CC:DD:EE:FF", profile=DeviceProfile.FJB)
+    try:
+        status = await client.get_status()
+        print(status)
+    finally:
+        await client.disconnect()
+
+
+asyncio.run(main())
 ```
 
 ## Web UI
@@ -52,6 +86,8 @@ pip install -e .
 Start the local frontend:
 
 ```bash
+pip install -e .[web]
+
 tingon-web
 tingon-web --mock
 tingon-web --host 0.0.0.0 --port 8765
