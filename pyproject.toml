@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tingon-py"
+version = "1.1.0"
+description = "Python tooling for TINGON BLE appliance and intimate devices"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "bleak",
+  "fastapi",
+  "uvicorn",
+]
+
+[project.scripts]
+tingon = "tingon_py.cli:main"
+tingon-web = "tingon_py.webapp:main"
+
+[tool.setuptools]
+packages = ["tingon_py"]
+
+[tool.setuptools.package-data]
+tingon_py = ["web/*", "web/assets/*"]

@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TINGON Local Control</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+  <div class="page-shell">
+    <aside class="sidebar">
+      <div class="brand-card">
+        <div class="brand-kicker">Local Control</div>
+        <h1>TINGON Control</h1>
+        <p>Scan, connect, and control appliance and intimate BLE profiles through the local Python library.</p>
+      </div>
+
+      <section class="panel stack-gap">
+        <div class="panel-head">
+          <h2>Devices</h2>
+          <button id="scan-button" class="pill-button">Scan</button>
+        </div>
+        <div class="scan-bar">
+          <label class="field">
+            <span>Name Filter</span>
+            <input id="scan-name" type="text" placeholder="Optional">
+          </label>
+          <label class="field field-small">
+            <span>Timeout</span>
+            <input id="scan-timeout" type="number" min="1" max="30" value="6">
+          </label>
+        </div>
+        <div id="device-list" class="device-list empty-state">
+          Run a scan to discover devices.
+        </div>
+      </section>
+
+      <section class="panel stack-gap">
+        <div class="panel-head">
+          <h2>Connection</h2>
+          <button id="disconnect-button" class="ghost-button">Disconnect</button>
+        </div>
+        <div id="connection-summary" class="connection-summary">
+          No active device session.
+        </div>
+        <div class="status-strip">
+          <div>
+            <span class="status-label">Event Stream</span>
+            <strong id="event-state">Connecting...</strong>
+          </div>
+          <div>
+            <span class="status-label">Active Profile</span>
+            <strong id="active-profile">None</strong>
+          </div>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main-view">
+      <div id="empty-hero" class="panel hero-panel empty-hero">
+        <div class="device-figure figure-idle"></div>
+        <div></div>
+      </div>
+
+      <section id="control-view" class="hidden">
+        <div class="hero-topbar">
+          <button id="refresh-session-button" class="icon-button" title="Refresh status">Refresh</button>
+          <div class="hero-title-wrap">
+            <div id="hero-title" class="hero-title">TINGON Device</div>
+            <div id="hero-subtitle" class="hero-subtitle">Disconnected</div>
+          </div>
+          <button id="play-toggle-button" class="play-button" title="Toggle playback">Play</button>
+        </div>
+
+        <div class="panel hero-panel">
+          <div class="hero-device">
+            <div id="hero-figure" class="device-figure">
+              <img id="hero-image" class="hero-image hidden" alt="Device hero">
+            </div>
+            <div class="hero-copy">
+              <div class="hero-kicker">Manual Control</div>
+              <h2 id="hero-heading">TINGON</h2>
+              <p id="hero-description">Select modes, adjust controls, and manage saved combinations for the connected device.</p>
+            </div>
+          </div>
+        </div>
+
+        <section id="n2-mode-panel" class="panel hidden">
+          <div class="section-head">
+            <div>
+              <h3>N2 Mode Family</h3>
+              <p>Select vibration, electric shock, or the combined family.</p>
+            </div>
+          </div>
+          <div id="n2-mode-grid" class="selector-grid selector-grid-3"></div>
+        </section>
+
+        <section id="intimate-playback-section" class="panel">
+          <div class="section-head">
+            <div>
+              <h3>Playback Flow</h3>
+              <p>Keep the current pattern steady, let it shuffle, or move through the preset set in order.</p>
+            </div>
+          </div>
+          <div id="playback-grid" class="playback-grid"></div>
+        </section>
+
+        <section id="intimate-mode-section" class="panel">
+          <div class="section-head">
+            <div>
+              <h3>Mode</h3>
+              <p>Choose from the available motion patterns for the connected device.</p>
+            </div>
+          </div>
+          <div id="mode-grid" class="mode-strip"></div>
+        </section>
+
+        <section id="intimate-manual-section" class="panel">
+          <div class="section-head">
+            <div>
+              <h3>Manual Control</h3>
+              <p id="manual-copy">Direct output control for the connected profile.</p>
+            </div>
+          </div>
+          <div id="position-panel" class="position-panel hidden">
+            <div id="position-grid" class="selector-grid selector-grid-4"></div>
+          </div>
+          <div id="motor-controls" class="slider-stack"></div>
+        </section>
+
+        <section id="m2-range-section" class="panel hidden">
+          <div class="section-head">
+            <div>
+              <h3>Motion Range</h3>
+              <p>Focus the active stroke on a tighter section, then save favorite ranges for quick recall.</p>
+            </div>
+          </div>
+          <div class="range-panel">
+            <div class="range-visual">
+              <img id="m2-range-image" src="/static/assets/m2_range.png" alt="M2 range map">
+            </div>
+            <div class="range-controls">
+              <label class="field">
+                <span>Start</span>
+                <input id="range-start" type="range" min="0" max="92" value="0">
+                <strong id="range-start-value">0</strong>
+              </label>
+              <label class="field">
+                <span>End</span>
+                <input id="range-end" type="range" min="0" max="92" value="92">
+                <strong id="range-end-value">92</strong>
+              </label>
+              <div class="range-actions">
+                <button id="apply-range-button" class="pill-button" type="button">Apply Range</button>
+                <button id="save-range-button" class="ghost-button" type="button">Save Selected Preset</button>
+              </div>
+            </div>
+          </div>
+          <div id="range-preset-grid" class="range-preset-grid"></div>
+        </section>
+
+        <section id="intimate-custom-section" class="panel">
+          <div class="section-head">
+            <div>
+              <h3>Custom Patterns</h3>
+              <p>Build your own sequence of patterns and durations, then save it for quick playback.</p>
+            </div>
+          </div>
+          <div id="custom-slots" class="custom-grid"></div>
+        </section>
+
+        <section id="appliance-controls-section" class="panel hidden">
+          <div class="section-head">
+            <div>
+              <h3>Device Controls</h3>
+              <p id="appliance-copy">Profile-specific appliance controls based on the BLE protocol map.</p>
+            </div>
+          </div>
+          <div id="appliance-controls" class="appliance-grid"></div>
+        </section>
+
+        <section id="appliance-status-section" class="panel hidden">
+          <div class="section-head">
+            <div>
+              <h3>Live Status</h3>
+              <p>Read-only values returned by the connected appliance profile.</p>
+            </div>
+          </div>
+          <div id="appliance-status" class="status-grid"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="custom-dialog" class="custom-dialog">
+    <form method="dialog" class="custom-form">
+      <div class="dialog-head">
+        <div>
+          <div class="hero-kicker">Custom Slot</div>
+          <h3 id="custom-dialog-title">Slot</h3>
+        </div>
+        <button id="close-custom-button" class="icon-button" value="cancel" type="submit">x</button>
+      </div>
+      <div class="dialog-copy">Create a repeating sequence by choosing a pattern and how long it should run before moving to the next step.</div>
+      <div id="custom-dialog-meta" class="dialog-copy"></div>
+      <div id="custom-step-list" class="custom-step-list"></div>
+      <div class="dialog-actions">
+        <button id="add-step-button" class="ghost-button" type="button">Add Step</button>
+        <button id="save-custom-button" class="pill-button" type="button">Save Slot</button>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="device-card-template">
+    <button class="device-card" type="button">
+      <div class="device-card-top">
+        <div class="device-card-name"></div>
+        <div class="device-card-rssi"></div>
+      </div>
+      <div class="device-card-meta"></div>
+      <div class="device-card-address"></div>
+    </button>
+  </template>
+
+  <template id="slider-template">
+    <div class="slider-card">
+      <div class="slider-head">
+        <span class="slider-label"></span>
+        <strong class="slider-value"></strong>
+      </div>
+      <input class="slider-input" type="range" min="0" max="100" value="0">
+    </div>
+  </template>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
