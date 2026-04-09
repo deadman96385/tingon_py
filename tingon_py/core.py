@@ -10,12 +10,20 @@ Requirements: pip install bleak
 import argparse
 import asyncio
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from random import randint
 from typing import Optional
+
+from .exceptions import (
+    TingonConnectionError,
+    TingonDependencyError,
+    TingonProtocolError,
+    TingonUnsupportedCapability,
+)
 
 try:
     from bleak import BleakClient, BleakScanner
@@ -26,6 +34,9 @@ except ImportError:
     BleakScanner = None
     BLEDevice = object
     AdvertisementData = object
+
+
+LOGGER = logging.getLogger("tingon_py")
 
 # ---------------------------------------------------------------------------
 # UUIDs

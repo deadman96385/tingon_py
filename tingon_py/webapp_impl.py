@@ -27,10 +27,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from tingon_py import (
+from .client import TingonClient
+from .core import (
     BATHROOM_MODE_NAME_TO_VALUE,
     CAP_BATHROOM_MODE,
     CAP_CUSTOM,
+    CAP_CUSTOM_RANGE,
     CAP_DEHUM,
     CAP_DRAINAGE,
     CAP_HUMIDITY,
@@ -42,14 +44,12 @@ from tingon_py import (
     CAP_POWER,
     CAP_STATUS,
     CAP_WATER_TEMP,
-    CAP_CUSTOM_RANGE,
     DeviceProfile,
-    IntimateProtocol,
     INTIMATE_PLAYBACK_BEHAVIORS,
+    IntimateProtocol,
     MockTingonDevice,
     ProtocolFamily,
     ScannedDevice,
-    TingonDevice,
     bathroom_mode_options,
     intimate_custom_step_limit,
     intimate_mode_count,
@@ -57,6 +57,7 @@ from tingon_py import (
     mock_scan_devices,
     profile_info,
 )
+from .scanner import scan as scan_devices
 
 
 WEB_ROOT = Path(__file__).parent / "web"
@@ -180,7 +181,7 @@ class DeviceSessionManager:
     def __init__(self, events: EventHub, mock_mode: bool = False):
         self._events = events
         self._lock = asyncio.Lock()
-        self._device: Optional[TingonDevice | MockTingonDevice] = None
+        self._device: Optional[TingonClient | MockTingonDevice] = None
         self._session: Optional[SessionRecord] = None
         self._scan_cache: dict[str, ScannedDevice] = {}
         self._poll_task: Optional[asyncio.Task] = None
@@ -211,7 +212,7 @@ class DeviceSessionManager:
             await asyncio.sleep(min(timeout, 0.35))
             devices = self._mock_scan(name)
         else:
-            devices = await TingonDevice.scan(name_filter=name, timeout=timeout)
+            devices = await scan_devices(name_filter=name, timeout=timeout)
         self._scan_cache = {device.address: device for device in devices}
         result = [serialize_scan(device) for device in devices]
         await self._events.broadcast("scan_completed", {"devices": result})
