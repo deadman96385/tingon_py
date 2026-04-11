@@ -32,6 +32,12 @@ from .specs import (
 LOGGER = logging.getLogger("tingon_py")
 
 
+def _uint16_le_hex(value: int) -> str:
+    """Format an unsigned 16-bit value as little-endian hex (4 chars)."""
+    value = max(0, min(0xFFFF, int(value)))
+    return format(value & 0xFF, "02x") + format((value >> 8) & 0xFF, "02x")
+
+
 class ApplianceController:
     """BLE controller for TINGON dehumidifier/water heater devices."""
 
@@ -217,11 +223,64 @@ class ApplianceController:
     async def set_dehumidification(self, on: bool) -> Optional[dict]:
         return await self.send_command(4, 1 if on else 0)
 
-    async def set_timer(self, timer_hex: str, remind_hex: str = "") -> Optional[dict]:
-        specs = {2: timer_hex}
-        if remind_hex:
-            specs[18] = remind_hex
+    async def set_timer(
+        self,
+        entries: "list[dict] | None" = None,
+        *,
+        timer_hex: Optional[str] = None,
+        remind_hex: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Set dehumidifier timer slots.
+
+        Call with a list of ``entries`` (dicts with ``switch``, ``status``,
+        and ``hours`` fields) to build the payload from structured data,
+        or pass pre-built ``timer_hex``/``remind_hex`` strings for raw
+        control.
+
+        Each entry represents a single schedule row:
+            switch: 1 = on-timer (turn device on), 0 = off-timer
+            status: 1 = enabled, 0 = disabled
+            hours:  1..23 hours until the event fires
+        """
+        if entries is not None:
+            timer_hex, remind_hex = self._build_timer_payload(entries)
+        if timer_hex is None:
+            timer_hex = "0000000000"
+        if not remind_hex:
+            remind_hex = "000000"
+        specs = {2: timer_hex, 18: remind_hex}
         return await self.send_multi_command(specs)
+
+    @staticmethod
+    def _build_timer_payload(entries: list[dict]) -> tuple[str, str]:
+        """Build (timer_hex, remind_hex) from a list of structured entries.
+
+        Format (from the official Android app):
+            timer_hex  = count(2) + per-entry(8) * N
+                         per-entry = switch(2) + status(2) + timerData(4, uint16 LE)
+            remind_hex = count(2) + per-entry(4) * N
+                         per-entry = timerRemind(4, uint16 LE)
+
+        ``timerData`` is ``hours * 60`` (minutes until the event fires).
+        When ``status`` is 0 the slot is disabled and ``timerRemind`` is 0;
+        when ``status`` is 1 ``timerRemind`` mirrors ``timerData``.
+        """
+        if not entries:
+            return "0000000000", "000000"
+
+        count_byte = format(len(entries), "02x")
+        timer_parts = [count_byte]
+        remind_parts = [count_byte]
+        for entry in entries:
+            switch = 1 if entry.get("switch") else 0
+            status = 1 if entry.get("status") else 0
+            hours = int(entry.get("hours", 0))
+            timer_data = max(0, hours) * 60
+            timer_parts.append(format(switch, "02x"))
+            timer_parts.append(format(status, "02x"))
+            timer_parts.append(_uint16_le_hex(timer_data))
+            remind_parts.append(_uint16_le_hex(timer_data if status else 0))
+        return "".join(timer_parts), "".join(remind_parts)
 
     # ------------------------------------------------------------------
     # Convenience: water heater
@@ -246,6 +305,15 @@ class ApplianceController:
 
     async def set_water_pressurization(self, on: bool) -> Optional[dict]:
         return await self.send_command(108, 1 if on else 0)
+
+    async def set_single_cruise(self, on: bool) -> Optional[dict]:
+        return await self.send_command(109, 1 if on else 0)
+
+    async def set_diandong(self, on: bool) -> Optional[dict]:
+        return await self.send_command(110, 1 if on else 0)
+
+    async def set_zero_cold_water(self, on: bool) -> Optional[dict]:
+        return await self.send_command(111, 1 if on else 0)
 
     # ------------------------------------------------------------------
     # WiFi Provisioning

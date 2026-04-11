@@ -40,6 +40,7 @@ from .profiles import (
     CAP_CUSTOM,
     CAP_CUSTOM_RANGE,
     CAP_DEHUM,
+    CAP_DIANDONG,
     CAP_DRAINAGE,
     CAP_ECO_CRUISE,
     CAP_HUMIDITY,
@@ -50,9 +51,12 @@ from .profiles import (
     CAP_POWER,
     CAP_PRESET_MODE,
     CAP_PROVISION,
+    CAP_SINGLE_CRUISE,
     CAP_STATUS,
+    CAP_TIMER,
     CAP_WATER_PRESSURIZATION,
     CAP_WATER_TEMP,
+    CAP_ZERO_COLD_WATER,
     CAP_ZERO_COLD_WATER_MODE,
     DeviceProfile,
     INTIMATE_PLAYBACK_BEHAVIORS,
@@ -108,6 +112,10 @@ def profile_ui(profile: DeviceProfile) -> dict:
         "supports_zero_cold_water_mode": CAP_ZERO_COLD_WATER_MODE in capabilities,
         "supports_eco_cruise": CAP_ECO_CRUISE in capabilities,
         "supports_water_pressurization": CAP_WATER_PRESSURIZATION in capabilities,
+        "supports_single_cruise": CAP_SINGLE_CRUISE in capabilities,
+        "supports_diandong": CAP_DIANDONG in capabilities,
+        "supports_zero_cold_water": CAP_ZERO_COLD_WATER in capabilities,
+        "supports_timer": CAP_TIMER in capabilities,
         "supports_provision": CAP_PROVISION in capabilities,
         "supports_play": CAP_PLAY in capabilities,
         "supports_preset_mode": CAP_PRESET_MODE in capabilities,
@@ -366,6 +374,38 @@ class DeviceSessionManager:
         async with self._lock:
             device = self._require_device_locked(CAP_WATER_PRESSURIZATION)
             await device.set_water_pressurization(on)
+            payload = await self._session_payload_locked()
+        await self._events.broadcast("session", payload)
+        return payload
+
+    async def set_single_cruise(self, on: bool) -> dict:
+        async with self._lock:
+            device = self._require_device_locked(CAP_SINGLE_CRUISE)
+            await device.set_single_cruise(on)
+            payload = await self._session_payload_locked()
+        await self._events.broadcast("session", payload)
+        return payload
+
+    async def set_diandong(self, on: bool) -> dict:
+        async with self._lock:
+            device = self._require_device_locked(CAP_DIANDONG)
+            await device.set_diandong(on)
+            payload = await self._session_payload_locked()
+        await self._events.broadcast("session", payload)
+        return payload
+
+    async def set_zero_cold_water(self, on: bool) -> dict:
+        async with self._lock:
+            device = self._require_device_locked(CAP_ZERO_COLD_WATER)
+            await device.set_zero_cold_water(on)
+            payload = await self._session_payload_locked()
+        await self._events.broadcast("session", payload)
+        return payload
+
+    async def set_timer(self, entries: list[dict]) -> dict:
+        async with self._lock:
+            device = self._require_device_locked(CAP_TIMER)
+            await device.set_timer(entries)
             payload = await self._session_payload_locked()
         await self._events.broadcast("session", payload)
         return payload
@@ -719,6 +759,16 @@ class ProvisionRequest(BaseModel):
     encrypt: bool = True
 
 
+class TimerEntry(BaseModel):
+    switch: int = Field(ge=0, le=1, description="1=on-timer, 0=off-timer")
+    status: int = Field(ge=0, le=1, description="1=enabled, 0=disabled")
+    hours: int = Field(ge=0, le=23)
+
+
+class TimerRequest(BaseModel):
+    entries: list[TimerEntry] = Field(default_factory=list, max_length=6)
+
+
 class CustomStep(BaseModel):
     mode: int = Field(ge=0, le=20)
     sec: int = Field(ge=0, le=255)
@@ -838,6 +888,27 @@ async def appliance_eco_cruise(request: PowerRequest):
 @app.post("/api/appliance/water-pressurization")
 async def appliance_water_pressurization(request: PowerRequest):
     return await manager.set_water_pressurization(request.on)
+
+
+@app.post("/api/appliance/single-cruise")
+async def appliance_single_cruise(request: PowerRequest):
+    return await manager.set_single_cruise(request.on)
+
+
+@app.post("/api/appliance/diandong")
+async def appliance_diandong(request: PowerRequest):
+    return await manager.set_diandong(request.on)
+
+
+@app.post("/api/appliance/zero-cold-water")
+async def appliance_zero_cold_water(request: PowerRequest):
+    return await manager.set_zero_cold_water(request.on)
+
+
+@app.post("/api/appliance/timer")
+async def appliance_timer(request: TimerRequest):
+    entries = [entry.model_dump() for entry in request.entries]
+    return await manager.set_timer(entries)
 
 
 @app.post("/api/appliance/provision")

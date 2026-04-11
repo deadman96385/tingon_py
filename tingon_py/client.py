@@ -81,6 +81,26 @@ class TingonClient:
     async def set_water_pressurization(self, on: bool):
         return await self._device.set_water_pressurization(on)
 
+    async def set_single_cruise(self, on: bool):
+        return await self._device.set_single_cruise(on)
+
+    async def set_diandong(self, on: bool):
+        return await self._device.set_diandong(on)
+
+    async def set_zero_cold_water(self, on: bool):
+        return await self._device.set_zero_cold_water(on)
+
+    async def set_timer(
+        self,
+        entries: "list[dict] | None" = None,
+        *,
+        timer_hex: Optional[str] = None,
+        remind_hex: Optional[str] = None,
+    ):
+        return await self._device.set_timer(
+            entries, timer_hex=timer_hex, remind_hex=remind_hex
+        )
+
     async def intimate_play(self, play: bool, mode: Optional[int] = None):
         await self._device.intimate_play(play, mode)
 

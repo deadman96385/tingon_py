@@ -103,6 +103,7 @@ const STATUS_LABELS = {
   work_time: "Work Time",
   total_work_time: "Total Work Time",
   timer: "Timer",
+  timer_entries: "Scheduled Timers",
   timer_remind_time: "Timer Reminder",
   setting_water_temp: "Target Water Temp",
   inlet_water_temp: "Inlet Water Temp",
@@ -144,6 +145,17 @@ const STATUS_FORMATTERS = {
   zero_cold_water_mode: (value) => ZERO_COLD_WATER_MODE_LABELS[value] ?? String(value),
   defrost: (value) => (value ? "On" : "Off"),
   bathroom_mode: (value) => ({ 1: "Normal", 2: "Kitchen", 4: "Eco", 5: "Season" }[value] || String(value)),
+  timer_entries: (value) => {
+    if (!Array.isArray(value) || value.length === 0) return "None";
+    return value
+      .map((entry) => {
+        const action = entry?.switch ? "On" : "Off";
+        const enabled = entry?.status ? "" : " (disabled)";
+        const hours = Number(entry?.hours || 0);
+        return `${action} in ${hours}h${enabled}`;
+      })
+      .join(", ");
+  },
 };
 
 const BATHROOM_MODE_CODES = {
@@ -798,6 +810,134 @@ function renderProvisionCard(ui, { ssidValue = "", passwordValue = "", urlValue 
   card.appendChild(status);
   return card;
 }
+
+function renderTimerCard(status) {
+  const card = document.createElement("div");
+  card.className = "toggle-card provision-card";
+  card.innerHTML = `
+    <strong>Timers</strong>
+    <p>Schedule the dehumidifier to turn on or off after a delay (1-23 hours).</p>
+  `;
+  const list = document.createElement("div");
+  list.className = "timer-list";
+  const rawEntries = Array.isArray(status.timer_entries) ? status.timer_entries : [];
+  const entries = rawEntries.map((entry) => ({
+    switch: entry?.switch ? 1 : 0,
+    status: entry?.status ? 1 : 0,
+    hours: Math.max(1, Math.min(23, Number(entry?.hours || 1))),
+  }));
+
+  const renderList = () => {
+    list.innerHTML = "";
+    if (entries.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "timer-empty";
+      empty.style.color = "var(--muted)";
+      empty.style.fontSize = "13px";
+      empty.textContent = "No timers scheduled.";
+      list.appendChild(empty);
+      return;
+    }
+    entries.forEach((entry, index) => {
+      const row = document.createElement("div");
+      row.className = "timer-row";
+      row.innerHTML = `
+        <label class="field">
+          <span>Action</span>
+          <select class="timer-switch">
+            <option value="1">Turn On</option>
+            <option value="0">Turn Off</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>In (hours)</span>
+          <input type="number" class="timer-hours" min="1" max="23" step="1">
+        </label>
+        <label class="field timer-enabled-field">
+          <span>Enabled</span>
+          <input type="checkbox" class="timer-enabled">
+        </label>
+        <button type="button" class="ghost-button timer-remove">Remove</button>
+      `;
+      row.querySelector(".timer-switch").value = String(entry.switch);
+      row.querySelector(".timer-hours").value = String(entry.hours);
+      row.querySelector(".timer-enabled").checked = Boolean(entry.status);
+      row.querySelector(".timer-switch").addEventListener("change", (event) => {
+        entries[index].switch = Number(event.target.value);
+      });
+      row.querySelector(".timer-hours").addEventListener("change", (event) => {
+        const raw = Number(event.target.value);
+        entries[index].hours = Math.max(1, Math.min(23, Number.isFinite(raw) ? raw : 1));
+        event.target.value = String(entries[index].hours);
+      });
+      row.querySelector(".timer-enabled").addEventListener("change", (event) => {
+        entries[index].status = event.target.checked ? 1 : 0;
+      });
+      row.querySelector(".timer-remove").addEventListener("click", () => {
+        entries.splice(index, 1);
+        renderList();
+      });
+      list.appendChild(row);
+    });
+  };
+  renderList();
+
+  const buttonRow = document.createElement("div");
+  buttonRow.className = "timer-buttons";
+  buttonRow.style.display = "flex";
+  buttonRow.style.gap = "8px";
+  buttonRow.style.marginTop = "10px";
+
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "ghost-button";
+  addBtn.textContent = "Add Timer";
+  addBtn.addEventListener("click", () => {
+    if (entries.length >= 6) {
+      statusLine.textContent = "Maximum of 6 timer entries.";
+      return;
+    }
+    entries.push({ switch: 1, status: 1, hours: 1 });
+    renderList();
+  });
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "pill-button";
+  saveBtn.textContent = "Save Timers";
+
+  const statusLine = document.createElement("p");
+  statusLine.className = "timer-status";
+  statusLine.style.margin = "8px 0 0";
+  statusLine.style.color = "var(--muted)";
+  statusLine.style.fontSize = "13px";
+
+  saveBtn.addEventListener("click", async () => {
+    saveBtn.disabled = true;
+    statusLine.textContent = "Saving...";
+    try {
+      await api("/api/appliance/timer", {
+        method: "POST",
+        body: JSON.stringify({ entries }),
+      }).then(updateSessionFromApi);
+      statusLine.textContent = entries.length === 0
+        ? "Cleared all timers."
+        : `Saved ${entries.length} timer${entries.length === 1 ? "" : "s"}.`;
+    } catch (err) {
+      statusLine.textContent = err?.message || "Failed to save timers.";
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  buttonRow.appendChild(addBtn);
+  buttonRow.appendChild(saveBtn);
+  card.appendChild(list);
+  card.appendChild(buttonRow);
+  card.appendChild(statusLine);
+  return card;
+}
+
 function formatStatusValue(key, value) {
   if (value === null || value === undefined || value === "") {
     return "n/a";
@@ -981,6 +1121,49 @@ function renderApplianceControls(ui, status) {
         body: JSON.stringify({ on: !pressureOn }),
       }).then(updateSessionFromApi).catch(reportError),
     }));
+  }
+
+  if (ui.supports_single_cruise) {
+    const singleOn = Boolean(status.single_cruise);
+    els.applianceControls.appendChild(renderToggleCard({
+      title: "Single Cruise",
+      copy: "Maintain one cruise insulation cycle while the heater runs.",
+      active: singleOn,
+      onClick: async () => api("/api/appliance/single-cruise", {
+        method: "POST",
+        body: JSON.stringify({ on: !singleOn }),
+      }).then(updateSessionFromApi).catch(reportError),
+    }));
+  }
+
+  if (ui.supports_zero_cold_water) {
+    const zcwOn = Boolean(status.zero_cold_water);
+    els.applianceControls.appendChild(renderToggleCard({
+      title: "Zero Cold Water",
+      copy: "Trigger a single zero-cold-water circulation burst.",
+      active: zcwOn,
+      onClick: async () => api("/api/appliance/zero-cold-water", {
+        method: "POST",
+        body: JSON.stringify({ on: !zcwOn }),
+      }).then(updateSessionFromApi).catch(reportError),
+    }));
+  }
+
+  if (ui.supports_diandong) {
+    const jogOn = Boolean(status.diandong);
+    els.applianceControls.appendChild(renderToggleCard({
+      title: "Jogging+",
+      copy: "Open the faucet and close it within 3 seconds to trigger zero cold water once.",
+      active: jogOn,
+      onClick: async () => api("/api/appliance/diandong", {
+        method: "POST",
+        body: JSON.stringify({ on: !jogOn }),
+      }).then(updateSessionFromApi).catch(reportError),
+    }));
+  }
+
+  if (ui.supports_timer) {
+    els.applianceControls.appendChild(renderTimerCard(status));
   }
 
   if (ui.supports_provision) {

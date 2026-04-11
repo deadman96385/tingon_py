@@ -85,6 +85,33 @@ class MockTingonDevice:
     async def set_water_pressurization(self, on: bool) -> None:
         self._status["water_pressurization"] = 1 if on else 0
 
+    async def set_single_cruise(self, on: bool) -> None:
+        self._status["single_cruise"] = 1 if on else 0
+
+    async def set_diandong(self, on: bool) -> None:
+        self._status["diandong"] = 1 if on else 0
+
+    async def set_zero_cold_water(self, on: bool) -> None:
+        self._status["zero_cold_water"] = 1 if on else 0
+
+    async def set_timer(
+        self,
+        entries: "list[dict] | None" = None,
+        *,
+        timer_hex: Optional[str] = None,
+        remind_hex: Optional[str] = None,
+    ) -> None:
+        if entries is None:
+            entries = []
+        self._status["timer_entries"] = [
+            {
+                "switch": 1 if entry.get("switch") else 0,
+                "status": 1 if entry.get("status") else 0,
+                "hours": int(entry.get("hours", 0)),
+            }
+            for entry in entries
+        ]
+
     async def provision_wifi(self, ssid: str, password: str, config_url: str = "", encrypt: bool = True):
         return {"ok": True, "ssid": ssid, "mock": True}
 
@@ -156,6 +183,9 @@ def default_mock_status(profile: DeviceProfile) -> dict:
             "defrost": 0,
             "work_time": 1380,
             "total_work_time": 22410,
+            "timer_entries": [
+                {"switch": 1, "status": 1, "hours": 2},
+            ],
         }
     if profile in {DeviceProfile.GS, DeviceProfile.RJ}:
         return {
