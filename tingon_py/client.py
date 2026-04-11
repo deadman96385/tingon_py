@@ -69,6 +69,18 @@ class TingonClient:
     async def set_bathroom_mode(self, mode: int):
         return await self._device.set_bathroom_mode(mode)
 
+    async def set_cruise_insulation_temp(self, temp: int):
+        return await self._device.set_cruise_insulation_temp(temp)
+
+    async def set_zero_cold_water_mode(self, mode: int):
+        return await self._device.set_zero_cold_water_mode(mode)
+
+    async def set_eco_cruise(self, on: bool):
+        return await self._device.set_eco_cruise(on)
+
+    async def set_water_pressurization(self, on: bool):
+        return await self._device.set_water_pressurization(on)
+
     async def intimate_play(self, play: bool, mode: Optional[int] = None):
         await self._device.intimate_play(play, mode)
 

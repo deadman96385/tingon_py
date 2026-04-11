@@ -36,10 +36,12 @@ from .mock.scan import mock_scan_devices
 from .models import ScannedDevice
 from .profiles import (
     CAP_BATHROOM_MODE,
+    CAP_CRUISE_TEMP,
     CAP_CUSTOM,
     CAP_CUSTOM_RANGE,
     CAP_DEHUM,
     CAP_DRAINAGE,
+    CAP_ECO_CRUISE,
     CAP_HUMIDITY,
     CAP_MOTOR2,
     CAP_N2_MODE,
@@ -47,8 +49,11 @@ from .profiles import (
     CAP_POSITION,
     CAP_POWER,
     CAP_PRESET_MODE,
+    CAP_PROVISION,
     CAP_STATUS,
+    CAP_WATER_PRESSURIZATION,
     CAP_WATER_TEMP,
+    CAP_ZERO_COLD_WATER_MODE,
     DeviceProfile,
     INTIMATE_PLAYBACK_BEHAVIORS,
     ProtocolFamily,
@@ -99,6 +104,11 @@ def profile_ui(profile: DeviceProfile) -> dict:
         "supports_dehumidification": CAP_DEHUM in capabilities,
         "supports_water_temperature": CAP_WATER_TEMP in capabilities,
         "supports_bathroom_mode": CAP_BATHROOM_MODE in capabilities,
+        "supports_cruise_insulation_temp": CAP_CRUISE_TEMP in capabilities,
+        "supports_zero_cold_water_mode": CAP_ZERO_COLD_WATER_MODE in capabilities,
+        "supports_eco_cruise": CAP_ECO_CRUISE in capabilities,
+        "supports_water_pressurization": CAP_WATER_PRESSURIZATION in capabilities,
+        "supports_provision": CAP_PROVISION in capabilities,
         "supports_play": CAP_PLAY in capabilities,
         "supports_preset_mode": CAP_PRESET_MODE in capabilities,
         "supports_second_motor": CAP_MOTOR2 in capabilities,
@@ -325,6 +335,53 @@ class DeviceSessionManager:
             payload = await self._session_payload_locked()
         await self._events.broadcast("session", payload)
         return payload
+
+    async def set_cruise_insulation_temp(self, temp: int) -> dict:
+        async with self._lock:
+            device = self._require_device_locked(CAP_CRUISE_TEMP)
+            await device.set_cruise_insulation_temp(temp)
+            payload = await self._session_payload_locked()
+        await self._events.broadcast("session", payload)
+        return payload
+
+    async def set_zero_cold_water_mode(self, mode: int) -> dict:
+        if mode not in (0, 1, 3):
+            raise HTTPException(status_code=400, detail="Zero cold water mode must be 0 (off), 1 (on), or 3 (enhanced)")
+        async with self._lock:
+            device = self._require_device_locked(CAP_ZERO_COLD_WATER_MODE)
+            await device.set_zero_cold_water_mode(mode)
+            payload = await self._session_payload_locked()
+        await self._events.broadcast("session", payload)
+        return payload
+
+    async def set_eco_cruise(self, on: bool) -> dict:
+        async with self._lock:
+            device = self._require_device_locked(CAP_ECO_CRUISE)
+            await device.set_eco_cruise(on)
+            payload = await self._session_payload_locked()
+        await self._events.broadcast("session", payload)
+        return payload
+
+    async def set_water_pressurization(self, on: bool) -> dict:
+        async with self._lock:
+            device = self._require_device_locked(CAP_WATER_PRESSURIZATION)
+            await device.set_water_pressurization(on)
+            payload = await self._session_payload_locked()
+        await self._events.broadcast("session", payload)
+        return payload
+
+    async def provision_wifi(self, ssid: str, password: str, config_url: str, encrypt: bool) -> dict:
+        async with self._lock:
+            device = self._require_device_locked(CAP_PROVISION)
+            if isinstance(device, MockTingonDevice):
+                return {"ok": True, "mock": True, "ssid": ssid}
+            try:
+                result = await device.provision_wifi(
+                    ssid, password, config_url=config_url, encrypt=encrypt
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Provisioning failed: {exc}") from exc
+        return {"ok": True, "mock": False, "ssid": ssid, "response": result}
 
     async def set_play(self, play: bool, mode: Optional[int]) -> dict:
         async with self._lock:
@@ -647,6 +704,21 @@ class BathroomModeRequest(BaseModel):
     name: str
 
 
+class CruiseTempRequest(BaseModel):
+    temp: int = Field(ge=0, le=100)
+
+
+class ZeroColdWaterModeRequest(BaseModel):
+    mode: int = Field(description="0=off, 1=on, 3=enhanced")
+
+
+class ProvisionRequest(BaseModel):
+    ssid: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=0, max_length=128)
+    config_url: str = ""
+    encrypt: bool = True
+
+
 class CustomStep(BaseModel):
     mode: int = Field(ge=0, le=20)
     sec: int = Field(ge=0, le=255)
@@ -746,6 +818,33 @@ async def appliance_water_temperature(request: WaterTemperatureRequest):
 @app.post("/api/appliance/bathroom-mode")
 async def appliance_bathroom_mode(request: BathroomModeRequest):
     return await manager.set_bathroom_mode(request.name)
+
+
+@app.post("/api/appliance/cruise-temp")
+async def appliance_cruise_temp(request: CruiseTempRequest):
+    return await manager.set_cruise_insulation_temp(request.temp)
+
+
+@app.post("/api/appliance/zero-cold-water-mode")
+async def appliance_zero_cold_water_mode(request: ZeroColdWaterModeRequest):
+    return await manager.set_zero_cold_water_mode(request.mode)
+
+
+@app.post("/api/appliance/eco-cruise")
+async def appliance_eco_cruise(request: PowerRequest):
+    return await manager.set_eco_cruise(request.on)
+
+
+@app.post("/api/appliance/water-pressurization")
+async def appliance_water_pressurization(request: PowerRequest):
+    return await manager.set_water_pressurization(request.on)
+
+
+@app.post("/api/appliance/provision")
+async def appliance_provision(request: ProvisionRequest):
+    return await manager.provision_wifi(
+        request.ssid, request.password, request.config_url, request.encrypt
+    )
 
 
 @app.post("/api/intimate/play")

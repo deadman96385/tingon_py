@@ -73,6 +73,21 @@ class MockTingonDevice:
         if mode in BATHROOM_MODES and BATHROOM_MODES[mode][1] is not None:
             self._status["setting_water_temp"] = BATHROOM_MODES[mode][1]
 
+    async def set_cruise_insulation_temp(self, temp: int) -> None:
+        self._status["cruise_insulation_temp"] = temp
+
+    async def set_zero_cold_water_mode(self, mode: int) -> None:
+        self._status["zero_cold_water_mode"] = mode
+
+    async def set_eco_cruise(self, on: bool) -> None:
+        self._status["eco_cruise"] = 1 if on else 0
+
+    async def set_water_pressurization(self, on: bool) -> None:
+        self._status["water_pressurization"] = 1 if on else 0
+
+    async def provision_wifi(self, ssid: str, password: str, config_url: str = "", encrypt: bool = True):
+        return {"ok": True, "ssid": ssid, "mock": True}
+
     # Intimate actions
     async def intimate_play(self, play: bool, mode: Optional[int]) -> None:
         self._status["play"] = play
@@ -154,8 +169,13 @@ def default_mock_status(profile: DeviceProfile) -> dict:
             "water_status": 1,
             "fire_status": 1,
             "equipment_failure": 0,
+            "cruise_insulation_temp": 45,
             "zero_cold_water_mode": 1,
             "eco_cruise": 0,
+            "water_pressurization": 0,
+            "single_cruise": 0,
+            "diandong": 0,
+            "zero_cold_water": 0,
         }
     base: dict = {
         "play": False,

@@ -180,6 +180,18 @@ class TingonDevice:
     async def set_bathroom_mode(self, mode: int):
         return await self._require_appliance().set_bathroom_mode(mode)
 
+    async def set_cruise_insulation_temp(self, temp: int):
+        return await self._require_appliance().set_cruise_insulation_temp(temp)
+
+    async def set_zero_cold_water_mode(self, mode: int):
+        return await self._require_appliance().set_zero_cold_water_mode(mode)
+
+    async def set_eco_cruise(self, on: bool):
+        return await self._require_appliance().set_eco_cruise(on)
+
+    async def set_water_pressurization(self, on: bool):
+        return await self._require_appliance().set_water_pressurization(on)
+
     async def provision_wifi(
         self,
         ssid: str,

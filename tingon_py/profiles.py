@@ -96,8 +96,16 @@ CAP_STATUS = "status"
 CAP_HUMIDITY = "humidity"
 CAP_DRAINAGE = "drainage"
 CAP_DEHUM = "dehumidification"
+CAP_TIMER = "timer"
 CAP_WATER_TEMP = "water_temperature"
 CAP_BATHROOM_MODE = "bathroom_mode"
+CAP_CRUISE_TEMP = "cruise_insulation_temp"
+CAP_ZERO_COLD_WATER_MODE = "zero_cold_water_mode"
+CAP_ZERO_COLD_WATER = "zero_cold_water"
+CAP_ECO_CRUISE = "eco_cruise"
+CAP_SINGLE_CRUISE = "single_cruise"
+CAP_WATER_PRESSURIZATION = "water_pressurization"
+CAP_DIANDONG = "diandong"
 CAP_PROVISION = "provision"
 CAP_PLAY = "play"
 CAP_PRESET_MODE = "preset_mode"
@@ -113,28 +121,44 @@ PROFILE_INFO: dict[DeviceProfile, ProfileInfo] = {
     DeviceProfile.FJB: ProfileInfo(
         DeviceProfile.FJB, ProtocolFamily.APPLIANCE, "FJB", "Dehumidifier",
         appliance_type=DeviceType.FJB,
-        capabilities=frozenset({CAP_POWER, CAP_STATUS, CAP_HUMIDITY, CAP_DRAINAGE, CAP_DEHUM, CAP_PROVISION}),
+        capabilities=frozenset({
+            CAP_POWER, CAP_STATUS, CAP_HUMIDITY, CAP_DRAINAGE, CAP_DEHUM,
+            CAP_TIMER, CAP_PROVISION,
+        }),
         name_hints=("xpower",),
         code_hints=("fjb",),
     ),
     DeviceProfile.GS: ProfileInfo(
         DeviceProfile.GS, ProtocolFamily.APPLIANCE, "GS", "Water Heater",
         appliance_type=DeviceType.GS,
-        capabilities=frozenset({CAP_POWER, CAP_STATUS, CAP_WATER_TEMP, CAP_BATHROOM_MODE, CAP_PROVISION}),
+        capabilities=frozenset({
+            CAP_POWER, CAP_STATUS, CAP_WATER_TEMP, CAP_BATHROOM_MODE,
+            CAP_CRUISE_TEMP, CAP_ZERO_COLD_WATER_MODE, CAP_ZERO_COLD_WATER,
+            CAP_ECO_CRUISE, CAP_SINGLE_CRUISE, CAP_WATER_PRESSURIZATION,
+            CAP_DIANDONG, CAP_PROVISION,
+        }),
         name_hints=("wanhe", "anward"),
         code_hints=("gs",),
     ),
     DeviceProfile.RJ: ProfileInfo(
         DeviceProfile.RJ, ProtocolFamily.APPLIANCE, "RJ", "Water Heater",
         appliance_type=DeviceType.RJ,
-        capabilities=frozenset({CAP_POWER, CAP_STATUS, CAP_WATER_TEMP, CAP_BATHROOM_MODE, CAP_PROVISION}),
+        capabilities=frozenset({
+            CAP_POWER, CAP_STATUS, CAP_WATER_TEMP, CAP_BATHROOM_MODE,
+            CAP_CRUISE_TEMP, CAP_ZERO_COLD_WATER_MODE, CAP_ZERO_COLD_WATER,
+            CAP_ECO_CRUISE, CAP_SINGLE_CRUISE, CAP_WATER_PRESSURIZATION,
+            CAP_DIANDONG, CAP_PROVISION,
+        }),
         name_hints=("wanhe", "anward"),
         code_hints=("rj",),
     ),
     DeviceProfile.FJB2: ProfileInfo(
         DeviceProfile.FJB2, ProtocolFamily.APPLIANCE, "FJB2", "Dehumidifier",
         appliance_type=DeviceType.FJB_SECOND,
-        capabilities=frozenset({CAP_POWER, CAP_STATUS, CAP_HUMIDITY, CAP_DRAINAGE, CAP_DEHUM, CAP_PROVISION}),
+        capabilities=frozenset({
+            CAP_POWER, CAP_STATUS, CAP_HUMIDITY, CAP_DRAINAGE, CAP_DEHUM,
+            CAP_TIMER, CAP_PROVISION,
+        }),
         name_hints=("xpower",),
         code_hints=("fjb2",),
     ),

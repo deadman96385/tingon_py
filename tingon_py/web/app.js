@@ -102,6 +102,8 @@ const STATUS_LABELS = {
   defrost: "Defrost",
   work_time: "Work Time",
   total_work_time: "Total Work Time",
+  timer: "Timer",
+  timer_remind_time: "Timer Reminder",
   setting_water_temp: "Target Water Temp",
   inlet_water_temp: "Inlet Water Temp",
   outlet_water_temp: "Outlet Water Temp",
@@ -111,8 +113,19 @@ const STATUS_LABELS = {
   water_status: "Water Status",
   fire_status: "Fire Status",
   equipment_failure: "Equipment Failure",
+  cruise_insulation_temp: "Cruise Insulation Temp",
   zero_cold_water_mode: "Zero Cold Water Mode",
+  zero_cold_water: "Zero Cold Water",
   eco_cruise: "Eco Cruise",
+  single_cruise: "Single Cruise",
+  water_pressurization: "Water Pressurization",
+  diandong: "Motorized Assist",
+};
+
+const ZERO_COLD_WATER_MODE_LABELS = {
+  0: "Off",
+  1: "On",
+  3: "Enhanced",
 };
 
 const STATUS_FORMATTERS = {
@@ -124,6 +137,11 @@ const STATUS_FORMATTERS = {
   water_status: (value) => (value ? "Flowing" : "Idle"),
   fire_status: (value) => (value ? "Ignited" : "Off"),
   eco_cruise: (value) => (value ? "On" : "Off"),
+  single_cruise: (value) => (value ? "On" : "Off"),
+  water_pressurization: (value) => (value ? "On" : "Off"),
+  diandong: (value) => (value ? "On" : "Off"),
+  zero_cold_water: (value) => (value ? "On" : "Off"),
+  zero_cold_water_mode: (value) => ZERO_COLD_WATER_MODE_LABELS[value] ?? String(value),
   defrost: (value) => (value ? "On" : "Off"),
   bathroom_mode: (value) => ({ 1: "Normal", 2: "Kitchen", 4: "Eco", 5: "Season" }[value] || String(value)),
 };
@@ -706,6 +724,80 @@ function renderModeButtonGroup(options, activeMode, onSelect) {
   wrap.appendChild(grid);
   return wrap;
 }
+
+function renderChoiceCard({ title, copy, options, activeValue, onSelect }) {
+  const wrap = document.createElement("div");
+  wrap.className = "mode-button-group";
+  wrap.innerHTML = `<strong>${title}</strong><p>${copy}</p>`;
+  const grid = document.createElement("div");
+  grid.className = "mode-button-grid";
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = activeValue === option.value ? "pill-button" : "ghost-button";
+    button.textContent = option.label;
+    button.addEventListener("click", () => onSelect(option.value));
+    grid.appendChild(button);
+  }
+  wrap.appendChild(grid);
+  return wrap;
+}
+
+function renderProvisionCard(ui, { ssidValue = "", passwordValue = "", urlValue = "" } = {}) {
+  const card = document.createElement("div");
+  card.className = "toggle-card provision-card";
+  card.innerHTML = `
+    <strong>WiFi Provisioning</strong>
+    <p>Send WiFi credentials to the device over BLE so it can reach the network.</p>
+  `;
+  const form = document.createElement("div");
+  form.className = "provision-form";
+  form.innerHTML = `
+    <label class="field"><span>SSID</span><input type="text" class="provision-ssid" placeholder="Network name"></label>
+    <label class="field"><span>Password</span><input type="password" class="provision-password" placeholder="Password"></label>
+    <label class="field"><span>Config URL (optional)</span><input type="text" class="provision-url" placeholder=""></label>
+  `;
+  form.querySelector(".provision-ssid").value = ssidValue;
+  form.querySelector(".provision-password").value = passwordValue;
+  form.querySelector(".provision-url").value = urlValue;
+  const submit = document.createElement("button");
+  submit.type = "button";
+  submit.className = "pill-button";
+  submit.textContent = "Send Credentials";
+  const status = document.createElement("p");
+  status.className = "provision-status";
+  status.style.margin = "8px 0 0";
+  status.style.color = "var(--muted)";
+  status.style.fontSize = "13px";
+  submit.addEventListener("click", async () => {
+    const ssid = form.querySelector(".provision-ssid").value.trim();
+    const password = form.querySelector(".provision-password").value;
+    const configUrl = form.querySelector(".provision-url").value.trim();
+    if (!ssid) {
+      status.textContent = "SSID is required.";
+      return;
+    }
+    submit.disabled = true;
+    status.textContent = "Sending...";
+    try {
+      const result = await api("/api/appliance/provision", {
+        method: "POST",
+        body: JSON.stringify({ ssid, password, config_url: configUrl, encrypt: true }),
+      });
+      status.textContent = result?.mock
+        ? `Mock provisioning accepted for ${ssid}.`
+        : `Credentials sent to ${ssid}.`;
+    } catch (err) {
+      status.textContent = err?.message || "Provisioning failed.";
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  card.appendChild(form);
+  card.appendChild(submit);
+  card.appendChild(status);
+  return card;
+}
 function formatStatusValue(key, value) {
   if (value === null || value === undefined || value === "") {
     return "n/a";
@@ -832,6 +924,67 @@ function renderApplianceControls(ui, status) {
         body: JSON.stringify({ name }),
       }).then(updateSessionFromApi).catch(reportError),
     ));
+  }
+
+  if (ui.supports_cruise_insulation_temp) {
+    els.applianceControls.appendChild(renderSliderCard({
+      title: "Cruise Insulation Temp",
+      copy: "Hold-temperature setpoint for cruise insulation mode.",
+      value: Number(status.cruise_insulation_temp || 0),
+      min: 0,
+      max: 100,
+      onChange: async (temp) => api("/api/appliance/cruise-temp", {
+        method: "POST",
+        body: JSON.stringify({ temp }),
+      }).then(updateSessionFromApi).catch(reportError),
+    }));
+  }
+
+  if (ui.supports_zero_cold_water_mode) {
+    els.applianceControls.appendChild(renderChoiceCard({
+      title: "Zero Cold Water Mode",
+      copy: "Pre-circulate hot water so the tap runs warm immediately.",
+      options: [
+        { value: 0, label: "Off" },
+        { value: 1, label: "On" },
+        { value: 3, label: "Enhanced" },
+      ],
+      activeValue: Number(status.zero_cold_water_mode ?? 0),
+      onSelect: async (mode) => api("/api/appliance/zero-cold-water-mode", {
+        method: "POST",
+        body: JSON.stringify({ mode }),
+      }).then(updateSessionFromApi).catch(reportError),
+    }));
+  }
+
+  if (ui.supports_eco_cruise) {
+    const ecoOn = Boolean(status.eco_cruise);
+    els.applianceControls.appendChild(renderToggleCard({
+      title: "Eco Cruise",
+      copy: "Energy-saving cruise insulation schedule.",
+      active: ecoOn,
+      onClick: async () => api("/api/appliance/eco-cruise", {
+        method: "POST",
+        body: JSON.stringify({ on: !ecoOn }),
+      }).then(updateSessionFromApi).catch(reportError),
+    }));
+  }
+
+  if (ui.supports_water_pressurization) {
+    const pressureOn = Boolean(status.water_pressurization);
+    els.applianceControls.appendChild(renderToggleCard({
+      title: "Water Pressurization",
+      copy: "Boost outgoing water pressure when supply is low.",
+      active: pressureOn,
+      onClick: async () => api("/api/appliance/water-pressurization", {
+        method: "POST",
+        body: JSON.stringify({ on: !pressureOn }),
+      }).then(updateSessionFromApi).catch(reportError),
+    }));
+  }
+
+  if (ui.supports_provision) {
+    els.applianceControls.appendChild(renderProvisionCard(ui));
   }
 }
 
