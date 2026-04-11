@@ -3,6 +3,10 @@
 This module knows about Bleak, GATT characteristics, and notification
 subscriptions. It does not know about TINGON protocol payload formats
 or device-family-specific command semantics.
+
+External consumers (Home Assistant integrations, the bundled CLI and
+webapp) are all expected to hand in a ``BLEDevice`` they already
+resolved. This module does not own scanning.
 """
 
 from __future__ import annotations
@@ -12,7 +16,11 @@ import logging
 from random import randint
 from typing import Callable, Optional
 
-from ..exceptions import TingonConnectionError, TingonDependencyError
+from ..exceptions import (
+    TingonConnectionError,
+    TingonDependencyError,
+    TingonUnavailableError,
+)
 from .uuids import (
     CHR_CMD_WRITE,
     CHR_PROV_NOTIFY,
@@ -25,23 +33,44 @@ try:
     from bleak import BleakClient
     from bleak.backends.device import BLEDevice
     from bleak.backends.scanner import AdvertisementData
+    from bleak.exc import BleakError
 except ImportError:  # pragma: no cover - import guard for optional bleak
     BleakClient = None  # type: ignore[assignment]
     BLEDevice = object  # type: ignore[assignment,misc]
     AdvertisementData = object  # type: ignore[assignment,misc]
+    BleakError = Exception  # type: ignore[assignment,misc]
+
+try:
+    from bleak_retry_connector import (
+        BleakClientWithServiceCache,
+        BleakNotFoundError,
+        establish_connection,
+    )
+except ImportError:  # pragma: no cover - import guard for optional dep
+    BleakClientWithServiceCache = None  # type: ignore[assignment]
+    BleakNotFoundError = Exception  # type: ignore[assignment,misc]
+    establish_connection = None  # type: ignore[assignment]
 
 
 LOGGER = logging.getLogger("tingon_py")
 
 
 NotificationHandler = Callable[[object, bytearray], None]
+DisconnectedCallback = Callable[[object], None]
+BleDeviceCallback = Callable[[], "Optional[BLEDevice]"]
 
 
 class BleTransport:
-    """Thin async wrapper around a single BleakClient connection."""
+    """Thin async wrapper around a single ``BleakClientWithServiceCache``.
+
+    Connection lifecycle is handled via
+    :func:`bleak_retry_connector.establish_connection` so transient
+    connection errors are retried with back-off and GATT services are
+    cached across reconnects.
+    """
 
     def __init__(self) -> None:
-        self._client: Optional["BleakClient"] = None
+        self._client: "Optional[BleakClient]" = None
         self._address: Optional[str] = None
 
     @property
@@ -58,21 +87,60 @@ class BleTransport:
             raise TingonDependencyError(
                 "bleak is not installed. Install it with: pip install bleak"
             )
+        if establish_connection is None:
+            raise TingonDependencyError(
+                "bleak-retry-connector is not installed. "
+                "Install it with: pip install bleak-retry-connector"
+            )
 
-    async def connect(self, address: str) -> None:
+    async def connect(
+        self,
+        device: "BLEDevice",
+        *,
+        name: Optional[str] = None,
+        disconnected_callback: Optional[DisconnectedCallback] = None,
+        ble_device_callback: Optional[BleDeviceCallback] = None,
+        max_attempts: int = 3,
+    ) -> None:
+        """Connect to a TINGON device via ``establish_connection``.
+
+        ``device`` must be a Bleak ``BLEDevice``. Callers that only have
+        a MAC address are responsible for resolving it — the CLI does
+        this at its edge via ``BleakScanner.find_device_by_address``.
+        """
         self.require_bleak()
-        self._address = address
-        self._client = BleakClient(address)
+        resolved_name = name or getattr(device, "name", None) or "Tingon"
+        self._address = getattr(device, "address", None)
+
         try:
-            await self._client.connect()
-        except Exception as exc:
-            raise TingonConnectionError(f"Failed to connect to {address}") from exc
-        LOGGER.info("Connected to %s", address)
+            self._client = await establish_connection(
+                BleakClientWithServiceCache,
+                device,
+                resolved_name,
+                disconnected_callback=disconnected_callback,
+                max_attempts=max_attempts,
+                ble_device_callback=ble_device_callback,
+                use_services_cache=True,
+            )
+        except BleakNotFoundError as exc:
+            raise TingonUnavailableError(
+                f"device not found: {self._address or resolved_name}"
+            ) from exc
+        except BleakError as exc:
+            raise TingonConnectionError(
+                f"failed to connect to {self._address or resolved_name}: {exc}"
+            ) from exc
+
+        LOGGER.info("Connected to %s", self._address or resolved_name)
 
     async def disconnect(self) -> None:
         if self._client and self._client.is_connected:
-            await self._client.disconnect()
-            LOGGER.info("Disconnected from %s", self._address or "device")
+            try:
+                await self._client.disconnect()
+            except BleakError as exc:
+                LOGGER.warning("Error during disconnect from %s: %s", self._address, exc)
+            else:
+                LOGGER.info("Disconnected from %s", self._address or "device")
         self._client = None
 
     async def start_notify(self, characteristic: str, handler: NotificationHandler) -> None:

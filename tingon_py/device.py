@@ -2,7 +2,7 @@
 
 ``TingonDevice`` is a thin coordinator that picks the right family-specific
 controller based on the profile, wires it up with a BLE transport, and
-exposes a stable surface for CLI and web callers.
+exposes a stable surface for CLI, webapp, and Home Assistant callers.
 
 It deliberately does not contain protocol or transport details of its own.
 """
@@ -10,14 +10,15 @@ It deliberately does not contain protocol or transport details of its own.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from .appliances.controller import ApplianceController
 from .ble.scan import scan as scan_devices
 from .ble.transport import BleTransport
 from .exceptions import TingonUnsupportedCapability
 from .intimates.controller import IntimateController
-from .models import ScannedDevice
+from .intimates.status import IntimateStatus
+from .models import ApplianceState, ScannedDevice
 from .profiles import (
     APPLIANCE_TYPE_TO_PROFILE,
     DeviceProfile,
@@ -27,12 +28,25 @@ from .profiles import (
     profile_info,
 )
 
+if TYPE_CHECKING:  # pragma: no cover
+    from bleak.backends.device import BLEDevice
+
 
 LOGGER = logging.getLogger("tingon_py")
 
 
+Callback = Callable[[], None]
+BleDeviceCallback = Callable[[], "Optional[BLEDevice]"]
+
+
 class TingonDevice:
-    """Async BLE orchestrator for TINGON IoT devices."""
+    """Async BLE orchestrator for TINGON IoT devices.
+
+    ``TingonDevice`` takes a Bleak ``BLEDevice`` and delegates to the
+    right family-specific controller. It exposes a callback registry so
+    Home Assistant ``DataUpdateCoordinator`` listeners (and other
+    consumers) can subscribe to state changes without polling.
+    """
 
     def __init__(self) -> None:
         self._transport = BleTransport()
@@ -41,6 +55,8 @@ class TingonDevice:
         self._device_key: str = "41"
         self._appliance: Optional[ApplianceController] = None
         self._intimate: Optional[IntimateController] = None
+        self._available: bool = False
+        self._listeners: list[Callback] = []
 
     # ------------------------------------------------------------------
     # Metadata
@@ -66,6 +82,25 @@ class TingonDevice:
     def is_intimate(self) -> bool:
         return self.profile_meta is not None and self.profile_meta.family == ProtocolFamily.INTIMATE
 
+    @property
+    def available(self) -> bool:
+        """True after a successful connect, False after disconnect or stale error."""
+        return self._available
+
+    @property
+    def appliance_state(self) -> Optional[ApplianceState]:
+        """Cached appliance snapshot (``None`` until the first ``update()``)."""
+        return self._appliance.state if self._appliance is not None else None
+
+    @property
+    def intimate_status(self) -> Optional[IntimateStatus]:
+        """Locally-tracked intimate device status.
+
+        Intimate devices have no polling endpoint — this is populated
+        from BLE notifications and mirrors the last-known state.
+        """
+        return self._intimate.status if self._intimate is not None else None
+
     def has_capability(self, capability: str) -> bool:
         return self.profile_meta is not None and capability in self.profile_meta.capabilities
 
@@ -77,6 +112,39 @@ class TingonDevice:
             )
 
     # ------------------------------------------------------------------
+    # Callback registry
+    # ------------------------------------------------------------------
+
+    def register_callback(self, callback: Callback) -> Callback:
+        """Register a zero-arg listener; returns an unregister function.
+
+        Listeners fire on:
+
+        - a command response that updates cached state,
+        - an intimate notification that updates ``intimate_status``,
+        - a BLE disconnect.
+
+        The registered callback should be cheap and non-blocking. It
+        runs in whatever loop the BLE event originated on.
+        """
+        self._listeners.append(callback)
+
+        def _unregister() -> None:
+            try:
+                self._listeners.remove(callback)
+            except ValueError:
+                pass
+
+        return _unregister
+
+    def _fire_callbacks(self) -> None:
+        for cb in list(self._listeners):
+            try:
+                cb()
+            except Exception:  # pragma: no cover - defensive
+                LOGGER.exception("Tingon listener raised")
+
+    # ------------------------------------------------------------------
     # Scanning (class-level helper for convenience)
     # ------------------------------------------------------------------
 
@@ -86,7 +154,11 @@ class TingonDevice:
         timeout: float = 10.0,
         scanner=None,
     ) -> list[ScannedDevice]:
-        """Scan for TINGON BLE devices."""
+        """Scan for TINGON BLE devices.
+
+        Convenience for the CLI and webapp. Home Assistant integrations
+        should use their own shared scanner and call ``parse_advertisement``.
+        """
         return await scan_devices(scanner=scanner, name_filter=name_filter, timeout=timeout)
 
     # ------------------------------------------------------------------
@@ -95,11 +167,29 @@ class TingonDevice:
 
     async def connect(
         self,
-        address: str,
+        device: "BLEDevice",
+        *,
         device_type: Optional[DeviceType] = None,
         profile: Optional[DeviceProfile] = None,
+        disconnected_callback: Optional[Callback] = None,
+        ble_device_callback: Optional[BleDeviceCallback] = None,
+        max_attempts: int = 3,
     ) -> None:
-        """Connect to a TINGON device and wire up the right controller."""
+        """Connect to a TINGON device and wire up the right controller.
+
+        ``device`` is a Bleak ``BLEDevice``. Callers that only have a
+        MAC address resolve it at their own edge (the CLI does this via
+        ``BleakScanner.find_device_by_address``; a Home Assistant
+        integration calls ``async_ble_device_from_address``).
+
+        ``disconnected_callback`` fires when the BLE link drops. It is
+        called after internal cleanup — ``available`` is already
+        ``False`` and registered listeners have already been notified.
+
+        ``ble_device_callback`` is forwarded to
+        :func:`bleak_retry_connector.establish_connection` and used to
+        obtain a fresh ``BLEDevice`` on retry if the cached one is stale.
+        """
         self._profile = profile or (
             APPLIANCE_TYPE_TO_PROFILE[device_type] if device_type is not None else None
         )
@@ -107,18 +197,30 @@ class TingonDevice:
             device_type = self.profile_meta.appliance_type
         self._device_type = device_type
 
-        await self._transport.connect(address)
+        def _on_disconnect(_client: object) -> None:
+            self._handle_disconnect(disconnected_callback)
+
+        await self._transport.connect(
+            device,
+            disconnected_callback=_on_disconnect,
+            ble_device_callback=ble_device_callback,
+            max_attempts=max_attempts,
+        )
 
         if self.is_intimate:
             assert self._profile is not None
             self._intimate = IntimateController(self._transport, self._profile)
+            self._intimate.register_listener(self._fire_callbacks)
             await self._intimate.setup_notifications()
         else:
             # Appliance family, or unknown profile (fall back to appliance wiring)
             self._appliance = ApplianceController(
                 self._transport, self._device_type, self._device_key
             )
+            self._appliance.register_listener(self._fire_callbacks)
             await self._appliance.setup_notifications()
+
+        self._available = True
 
         if self.profile_meta is not None:
             LOGGER.info(
@@ -130,10 +232,23 @@ class TingonDevice:
             category = "Dehumidifier" if self._appliance and self._appliance.is_dehumidifier else "Water Heater"
             LOGGER.info("Device type: %s (%s)", self._device_type.name, category)
 
+    def _handle_disconnect(self, consumer_callback: Optional[Callback]) -> None:
+        """Internal disconnect hook — runs inside Bleak's callback thread."""
+        self._available = False
+        self._fire_callbacks()
+        if consumer_callback is not None:
+            try:
+                consumer_callback()
+            except Exception:  # pragma: no cover - defensive
+                LOGGER.exception("Consumer disconnected_callback raised")
+
     async def disconnect(self) -> None:
         await self._transport.disconnect()
         self._appliance = None
         self._intimate = None
+        if self._available:
+            self._available = False
+            self._fire_callbacks()
 
     # ------------------------------------------------------------------
     # Controller access
@@ -150,13 +265,19 @@ class TingonDevice:
         return self._intimate
 
     # ------------------------------------------------------------------
-    # Status
+    # Polling update (coordinator-friendly)
     # ------------------------------------------------------------------
 
-    async def get_status(self) -> Optional[dict]:
+    async def update(self) -> None:
+        """Refresh cached state.
+
+        For appliances this issues a full query and updates
+        ``appliance_state``. Intimate devices are push-only — ``update``
+        is a no-op and state is already current via notifications.
+        """
         if self.is_intimate:
-            return self._require_intimate().get_status()
-        return await self._require_appliance().get_status()
+            return
+        await self._require_appliance().query_all()
 
     # ------------------------------------------------------------------
     # Appliance actions
@@ -253,6 +374,31 @@ class TingonDevice:
 
     async def intimate_set_custom(self, slot_id: int, items: list[tuple[int, int]]):
         await self._require_intimate().set_custom(slot_id, items)
+
+    def intimate_status_dict(self) -> Optional[dict]:
+        """Return the intimate controller's locally-tracked status as a dict.
+
+        Intimate devices have no polling endpoint — this returns the
+        last-known state assembled from BLE notifications and local
+        mutations, with profile-aware label mapping applied.
+        """
+        if self._intimate is None:
+            return None
+        return self._intimate.status_dict()
+
+    def status_dict(self) -> Optional[dict]:
+        """Return the current device status as a dict.
+
+        Unified view for display/serialisation: for appliance devices
+        this returns ``appliance_state.as_dict()``; for intimate
+        devices it returns the locally-tracked status with profile
+        aware label mapping. Callers that need a refreshed appliance
+        snapshot should ``await update()`` first.
+        """
+        if self.is_intimate:
+            return self.intimate_status_dict()
+        state = self.appliance_state
+        return state.as_dict() if state is not None else None
 
     # ------------------------------------------------------------------
     # Raw access (works for either family)

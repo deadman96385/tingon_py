@@ -30,10 +30,16 @@ from pydantic import BaseModel, Field
 from .appliances.specs import BATHROOM_MODE_NAME_TO_VALUE, bathroom_mode_options
 from .ble.scan import scan as ble_scan_devices
 from .client import TingonClient
+from .exceptions import TingonDependencyError, TingonUnavailableError
 from .intimates.protocol import IntimateProtocol
 from .mock.device import MockTingonDevice
 from .mock.scan import mock_scan_devices
 from .models import ScannedDevice
+
+try:
+    from bleak import BleakScanner
+except ImportError:  # pragma: no cover - bleak is an optional runtime dep
+    BleakScanner = None  # type: ignore[assignment]
 from .profiles import (
     CAP_BATHROOM_MODE,
     CAP_CRUISE_TEMP,
@@ -251,13 +257,31 @@ class DeviceSessionManager:
             if self._mock_mode:
                 device = MockTingonDevice(address, profile, scanned.name if scanned is not None else meta.display_name)
                 try:
-                    await device.connect(address, profile=profile)
+                    await device.connect(profile=profile)
                 except Exception as exc:
                     raise HTTPException(status_code=400, detail=f"Mock connect failed: {exc}") from exc
             else:
+                if BleakScanner is None:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="bleak is not installed. Install it with: pip install bleak",
+                    )
+                try:
+                    ble_device = await BleakScanner.find_device_by_address(address, timeout=10.0)
+                except Exception as exc:  # pragma: no cover - defensive
+                    raise HTTPException(status_code=400, detail=f"BLE scan failed: {exc}") from exc
+                if ble_device is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"device not found: {address}",
+                    )
                 device = TingonClient()
                 try:
-                    await device.connect(address, profile=profile)
+                    await device.connect(ble_device, profile=profile)
+                except TingonUnavailableError as exc:
+                    raise HTTPException(status_code=404, detail=str(exc)) from exc
+                except TingonDependencyError as exc:
+                    raise HTTPException(status_code=500, detail=str(exc)) from exc
                 except Exception as exc:
                     raise HTTPException(status_code=400, detail=f"BLE connect failed: {exc}") from exc
 
@@ -472,7 +496,7 @@ class DeviceSessionManager:
         async with self._lock:
             self._require_device_locked(CAP_PRESET_MODE)
             self._playback_behavior = normalized
-            status = await self._device.get_status()
+            status = self._device.status_dict() if self._device is not None else None
             self._reset_playback_clock_locked(enabled=bool(status and status.get("play")))
             payload = await self._session_payload_locked()
         await self._events.broadcast("session", payload)
@@ -558,6 +582,24 @@ class DeviceSessionManager:
         self._last_status_json = ""
         self._next_mode_change_at = None
 
+    async def _read_status_locked(self) -> Optional[dict]:
+        """Fetch a status dict for the active device.
+
+        For real appliance clients this refreshes the cached
+        ``ApplianceState`` via ``update()`` and returns its dict form.
+        Intimate devices are push-only, so we just read the last
+        notification-backed snapshot. The mock answers both directly
+        from its in-memory state.
+        """
+        if self._device is None or self._session is None:
+            return None
+        if isinstance(self._device, TingonClient) and not self._device.is_intimate:
+            try:
+                await self._device.update()
+            except Exception:
+                pass
+        return self._device.status_dict()
+
     async def _refresh_custom_locked(self, device: Optional[TingonClient | MockTingonDevice] = None):
         device = device or self._require_device_locked(CAP_CUSTOM)
         if not device.has_capability(CAP_CUSTOM):
@@ -575,7 +617,7 @@ class DeviceSessionManager:
         if self._device is None or self._session is None:
             return self._empty_session()
 
-        status = await self._device.get_status()
+        status = await self._read_status_locked()
         profile = self._session.profile
         control_state = None
         if profile_info(profile).family == ProtocolFamily.INTIMATE:
@@ -609,7 +651,7 @@ class DeviceSessionManager:
                 async with self._lock:
                     if self._device is None or self._session is None:
                         return
-                    status = await self._device.get_status()
+                    status = await self._read_status_locked()
                     status = await self._advance_playback_locked(status)
                     status_json = json.dumps(status, sort_keys=True)
                     if status_json == self._last_status_json:
@@ -689,7 +731,7 @@ class DeviceSessionManager:
 
         await self._device.intimate_set_mode(next_mode)
         self._next_mode_change_at = time.monotonic() + 30.0
-        return await self._device.get_status()
+        return self._device.status_dict()
 
 
 class ScanRequest(BaseModel):

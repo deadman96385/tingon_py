@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from ..appliances.specs import BATHROOM_MODES
 from ..intimates.protocol import IntimateProtocol
@@ -12,23 +12,31 @@ from ..profiles import (
     CAP_MOTOR2,
     DeviceProfile,
     ProfileInfo,
+    ProtocolFamily,
     profile_info,
 )
+
+
+Callback = Callable[[], None]
 
 
 class MockTingonDevice:
     """Reusable in-memory controller for testing without BLE hardware.
 
-    This mirrors the subset of the ``TingonDevice`` API that the CLI and
-    webapp use, but keeps all state in memory rather than talking to a
-    real BLE peripheral.
+    This mirrors the subset of the ``TingonDevice`` / ``TingonClient``
+    API that the CLI and webapp use, but keeps all state in memory
+    rather than talking to a real BLE peripheral. It is duck-type
+    compatible with the real client for status reads, capability
+    gating, and the callback registry.
     """
 
     def __init__(self, address: str, profile: DeviceProfile, name: str) -> None:
         self._address = address
         self._profile = profile
         self._name = name
-        self._status = default_mock_status(profile)
+        self._status: dict[str, Any] = default_mock_status(profile)
+        self._available: bool = False
+        self._listeners: list[Callback] = []
 
     @property
     def profile(self) -> DeviceProfile:
@@ -38,17 +46,86 @@ class MockTingonDevice:
     def profile_meta(self) -> ProfileInfo:
         return profile_info(self._profile)
 
+    @property
+    def is_appliance(self) -> bool:
+        return self.profile_meta.family == ProtocolFamily.APPLIANCE
+
+    @property
+    def is_intimate(self) -> bool:
+        return self.profile_meta.family == ProtocolFamily.INTIMATE
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    @property
+    def appliance_state(self) -> Optional[dict]:
+        """Mock's stand-in for the real client's ``appliance_state``.
+
+        The real client returns an ``ApplianceState`` dataclass, but the
+        webapp / tests only call ``.as_dict()`` on the result — so the
+        mock returns a tiny shim that answers ``as_dict()``.
+        """
+        if not self._available or not self.is_appliance:
+            return None
+        return _MockApplianceState(json.loads(json.dumps(self._status)))
+
+    @property
+    def intimate_status(self) -> Optional[dict]:
+        if not self._available or not self.is_intimate:
+            return None
+        return json.loads(json.dumps(self._status))
+
     def has_capability(self, capability: str) -> bool:
         return capability in self.profile_meta.capabilities
 
-    async def connect(self, _address: str, profile: Optional[DeviceProfile] = None) -> None:
+    def register_callback(self, callback: Callback) -> Callback:
+        self._listeners.append(callback)
+
+        def _unregister() -> None:
+            try:
+                self._listeners.remove(callback)
+            except ValueError:
+                pass
+
+        return _unregister
+
+    def _fire_callbacks(self) -> None:
+        for cb in list(self._listeners):
+            try:
+                cb()
+            except Exception:
+                pass
+
+    async def connect(
+        self,
+        device: Any = None,
+        *,
+        profile: Optional[DeviceProfile] = None,
+        disconnected_callback: Optional[Callback] = None,
+        ble_device_callback: Any = None,
+        max_attempts: int = 3,
+        **_: Any,
+    ) -> None:
         if profile is not None:
             self._profile = profile
+        self._available = True
 
     async def disconnect(self) -> None:
+        if self._available:
+            self._available = False
+            self._fire_callbacks()
+
+    async def update(self) -> None:
+        """No-op for the mock — state is always current in memory."""
         return None
 
-    async def get_status(self) -> dict:
+    def status_dict(self) -> dict:
+        return json.loads(json.dumps(self._status))
+
+    def intimate_status_dict(self) -> Optional[dict]:
+        if not self.is_intimate:
+            return None
         return json.loads(json.dumps(self._status))
 
     # Appliance actions
@@ -163,6 +240,16 @@ class MockTingonDevice:
         self._status[f"custom_{slot_id}"] = [
             {"mode": mode, "sec": sec} for mode, sec in items
         ]
+
+
+class _MockApplianceState:
+    """Minimal shim so webapp/tests can call ``.as_dict()`` on the mock."""
+
+    def __init__(self, snapshot: dict) -> None:
+        self._snapshot = snapshot
+
+    def as_dict(self) -> dict:
+        return dict(self._snapshot)
 
 
 def default_mock_status(profile: DeviceProfile) -> dict:

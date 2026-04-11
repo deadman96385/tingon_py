@@ -2,18 +2,37 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from .ble.scan import scan as scan_devices
 from .device import TingonDevice
+from .intimates.status import IntimateStatus
+from .models import ApplianceState
 from .profiles import DeviceProfile, DeviceType, ProfileInfo
+
+if TYPE_CHECKING:  # pragma: no cover
+    from bleak.backends.device import BLEDevice
+
+
+Callback = Callable[[], None]
+BleDeviceCallback = Callable[[], "Optional[BLEDevice]"]
 
 
 class TingonClient:
-    """Canonical async client for TINGON BLE devices."""
+    """Canonical async client for TINGON BLE devices.
+
+    Takes a Bleak ``BLEDevice`` at connect time — callers that only
+    have a MAC address are responsible for resolving it (CLI: via
+    ``BleakScanner.find_device_by_address``; Home Assistant: via
+    ``bluetooth.async_ble_device_from_address``).
+    """
 
     def __init__(self) -> None:
         self._device = TingonDevice()
+
+    # ------------------------------------------------------------------
+    # Metadata passthrough
+    # ------------------------------------------------------------------
 
     @property
     def profile(self) -> Optional[DeviceProfile]:
@@ -31,25 +50,61 @@ class TingonClient:
     def is_intimate(self) -> bool:
         return self._device.is_intimate
 
+    @property
+    def available(self) -> bool:
+        return self._device.available
+
+    @property
+    def appliance_state(self) -> Optional[ApplianceState]:
+        return self._device.appliance_state
+
+    @property
+    def intimate_status(self) -> Optional[IntimateStatus]:
+        return self._device.intimate_status
+
     def has_capability(self, capability: str) -> bool:
         return self._device.has_capability(capability)
 
     def require_capability(self, capability: str) -> None:
         self._device.require_capability(capability)
 
+    def register_callback(self, callback: Callback) -> Callback:
+        """Register a zero-arg listener; returns an unregister function."""
+        return self._device.register_callback(callback)
+
+    # ------------------------------------------------------------------
+    # Connection lifecycle
+    # ------------------------------------------------------------------
+
     async def connect(
         self,
-        address: str,
+        device: "BLEDevice",
+        *,
         device_type: Optional[DeviceType] = None,
         profile: Optional[DeviceProfile] = None,
+        disconnected_callback: Optional[Callback] = None,
+        ble_device_callback: Optional[BleDeviceCallback] = None,
+        max_attempts: int = 3,
     ) -> None:
-        await self._device.connect(address, device_type=device_type, profile=profile)
+        await self._device.connect(
+            device,
+            device_type=device_type,
+            profile=profile,
+            disconnected_callback=disconnected_callback,
+            ble_device_callback=ble_device_callback,
+            max_attempts=max_attempts,
+        )
 
     async def disconnect(self) -> None:
         await self._device.disconnect()
 
-    async def get_status(self):
-        return await self._device.get_status()
+    async def update(self) -> None:
+        """Refresh cached state (appliance query; no-op for intimates)."""
+        await self._device.update()
+
+    # ------------------------------------------------------------------
+    # Appliance actions
+    # ------------------------------------------------------------------
 
     async def set_power(self, on: bool):
         return await self._device.set_power(on)
@@ -101,6 +156,10 @@ class TingonClient:
             entries, timer_hex=timer_hex, remind_hex=remind_hex
         )
 
+    # ------------------------------------------------------------------
+    # Intimate actions
+    # ------------------------------------------------------------------
+
     async def intimate_play(self, play: bool, mode: Optional[int] = None):
         await self._device.intimate_play(play, mode)
 
@@ -127,6 +186,14 @@ class TingonClient:
 
     async def intimate_set_custom(self, slot_id: int, items: list[tuple[int, int]]):
         await self._device.intimate_set_custom(slot_id, items)
+
+    def intimate_status_dict(self) -> Optional[dict]:
+        """Return the intimate controller's locally-tracked status as a dict."""
+        return self._device.intimate_status_dict()
+
+    def status_dict(self) -> Optional[dict]:
+        """Unified status-as-dict view for both families."""
+        return self._device.status_dict()
 
     async def provision_wifi(
         self,

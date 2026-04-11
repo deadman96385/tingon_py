@@ -1,4 +1,10 @@
-"""BLE scanning and advertisement parsing for TINGON devices."""
+"""BLE scanning and advertisement parsing for TINGON devices.
+
+``parse_advertisement`` is the public, Bleak-free entry point for
+external consumers (Home Assistant integrations feed it straight from
+``BluetoothServiceInfoBleak``). ``scan`` is a convenience wrapper for
+the CLI and webapp that drives a ``BleakScanner`` locally.
+"""
 
 from __future__ import annotations
 
@@ -40,26 +46,42 @@ def _infer_xiyu_profile(name: str, dev_type_byte: int, sub_version: int) -> Devi
     return XIYU_TYPE_TO_PROFILE.get(dev_type_byte)
 
 
-def _parse_scan_result(device: "BLEDevice", adv: "AdvertisementData", name_filter: str) -> ScannedDevice | None:
-    if name_filter and device.name and name_filter.lower() not in device.name.lower():
+def parse_advertisement(
+    *,
+    name: str | None,
+    manufacturer_data: dict[int, bytes] | None,
+    rssi: int = 0,
+    address: str = "",
+    name_filter: str = "",
+) -> ScannedDevice | None:
+    """Parse a TINGON advertisement into a :class:`ScannedDevice`.
+
+    Pure function — does not touch Bleak. Home Assistant integrations
+    call this from their own ``_async_process_advertisement`` callback,
+    feeding fields pulled off a ``BluetoothServiceInfoBleak``.
+
+    Returns ``None`` if the advertisement is not a recognisable TINGON
+    device or if ``name_filter`` rules it out.
+    """
+    if not name:
         return None
-    if not device.name:
+    if name_filter and name_filter.lower() not in name.lower():
         return None
 
     scanned = ScannedDevice(
-        address=device.address,
-        name=device.name or "Unknown",
-        rssi=adv.rssi,
+        address=address,
+        name=name,
+        rssi=rssi,
     )
 
-    if adv.manufacturer_data:
-        for _company_id, mfr_data in adv.manufacturer_data.items():
-            scanned.raw_manufacturer_data = mfr_data
+    if manufacturer_data:
+        for _company_id, mfr_data in manufacturer_data.items():
+            scanned.raw_manufacturer_data = bytes(mfr_data)
             scanned.device_key = TingonEncryption.extract_device_key(mfr_data)
             if len(mfr_data) > 11:
                 dev_type_byte = mfr_data[10]
                 sub_version = mfr_data[11] if len(mfr_data) > 11 else 0
-                scanned.profile = _infer_xiyu_profile(scanned.name, dev_type_byte, sub_version)
+                scanned.profile = _infer_xiyu_profile(name, dev_type_byte, sub_version)
                 if scanned.profile is None and dev_type_byte == 0 and sub_version == 2:
                     scanned.device_type = DeviceType.FJB_SECOND
                 elif scanned.profile is None and dev_type_byte in (0, 1, 2, 3):
@@ -75,6 +97,19 @@ def _parse_scan_result(device: "BLEDevice", adv: "AdvertisementData", name_filte
         scanned.profile = DeviceProfile.parse(scanned.name, fuzzy=True)
 
     return scanned
+
+
+def _parse_scan_result(device: "BLEDevice", adv: "AdvertisementData", name_filter: str) -> ScannedDevice | None:
+    """Thin adapter that feeds a Bleak ``BLEDevice``/``AdvertisementData`` pair
+    into :func:`parse_advertisement`.
+    """
+    return parse_advertisement(
+        name=device.name,
+        manufacturer_data=dict(adv.manufacturer_data) if adv.manufacturer_data else None,
+        rssi=adv.rssi,
+        address=device.address,
+        name_filter=name_filter,
+    )
 
 
 def _iter_discovered_devices(scanner: Any):

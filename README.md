@@ -20,6 +20,8 @@ The base install only pulls `bleak`. FastAPI and Uvicorn are optional and only n
 ```python
 import asyncio
 
+from bleak import BleakScanner
+
 from tingon_py import DeviceProfile, TingonClient, scan
 
 
@@ -30,9 +32,15 @@ async def main() -> None:
     for d in devices:
         print(d.address, d.name, d.profile)
 
-    # 2. Connect with an explicit profile and drive the device.
+    # 2. Resolve a BLEDevice for the target — the library does not own
+    #    the adapter, callers pass in a ready-to-use BLEDevice.
+    ble_device = await BleakScanner.find_device_by_address("AA:BB:CC:DD:EE:FF")
+    if ble_device is None:
+        raise SystemExit("device not found")
+
+    # 3. Connect with an explicit profile and drive the device.
     client = TingonClient()
-    await client.connect("AA:BB:CC:DD:EE:FF", profile=DeviceProfile.M2)
+    await client.connect(ble_device, profile=DeviceProfile.M2)
     try:
         await client.intimate_play(True, mode=1)
         await client.intimate_set_output(70, 30)   # motor1, motor2
@@ -44,13 +52,17 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-The same client also drives the (rarer) appliance profiles:
+The same client also drives the (rarer) appliance profiles. Appliance
+state is exposed as a cached snapshot that you refresh with `update()`:
 
 ```python
 client = TingonClient()
-await client.connect("AA:BB:CC:DD:EE:FF", profile=DeviceProfile.FJB)
+await client.connect(ble_device, profile=DeviceProfile.FJB)
 try:
-    print(await client.get_status())
+    await client.update()                       # refresh cached state
+    state = client.appliance_state              # ApplianceState or None
+    if state is not None:
+        print(state.as_dict())
     await client.set_power(True)
     await client.set_target_humidity(50)
 finally:
@@ -64,11 +76,78 @@ Everything re-exported from `tingon_py` is considered stable:
 | Symbol | Purpose |
 | --- | --- |
 | `TingonClient` | Async facade for connecting, querying, and controlling a device. Picks the right controller (appliance vs intimate) based on the profile. |
+| `TingonDevice` | Low-level orchestrator the client wraps. Accepts a Bleak `BLEDevice` plus `disconnected_callback` / `ble_device_callback`. Home Assistant integrations use it directly. |
 | `scan` | Async BLE scan returning `ScannedDevice` objects. Accepts an injectable `scanner` for tests. |
+| `parse_advertisement` | Pure function that turns `(name, manufacturer_data, rssi, address)` into a `ScannedDevice`. Home Assistant integrations call it from their own advertisement callback. |
 | `ScannedDevice` | Dataclass with `address`, `name`, `rssi`, `device_type`, `profile`, and raw advertisement metadata. |
+| `ApplianceState` | Frozen dataclass snapshot of appliance state. `TingonClient.appliance_state` returns the cached snapshot; call `as_dict()` to get a JSON-friendly view. |
+| `IntimateStatus` | Dataclass mirroring the last-known intimate device state (push-only; updated from BLE notifications). |
 | `DeviceProfile`, `DeviceType`, `ProtocolFamily` | Enums covering every supported device family and protocol. |
 | `ProfileInfo`, `profile_info` | Metadata per profile (display name, capability flags, protocol family). Use `profile_info(DeviceProfile.M2)` to introspect. |
-| `TingonError` and subclasses | `TingonConnectionError`, `TingonProtocolError`, `TingonUnsupportedCapability`, `TingonDependencyError`. Catch `TingonError` to handle anything the library raises. |
+| `TingonError` and subclasses | `TingonConnectionError`, `TingonUnavailableError`, `TingonProtocolError`, `TingonUnsupportedCapability`, `TingonDependencyError`. Catch `TingonError` to handle anything the library raises; catch `TingonUnavailableError` specifically to distinguish "temporarily gone" from "fundamentally broken". |
+
+## Using with Home Assistant
+
+`tingon-py` is designed to drop into a Home Assistant custom component
+without fighting the shared Bluetooth stack. The library never starts
+its own `BleakScanner`, accepts a `BLEDevice` on `connect()`, and
+exposes a zero-arg callback registry that fits the
+`DataUpdateCoordinator` pattern.
+
+Advertisement parsing is a pure function — feed it directly from the
+HA advertisement callback:
+
+```python
+from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
+from tingon_py import parse_advertisement, DeviceProfile
+
+
+@callback
+def _async_on_advertisement(info: BluetoothServiceInfoBleak) -> None:
+    scanned = parse_advertisement(
+        name=info.name,
+        manufacturer_data=dict(info.manufacturer_data),
+        rssi=info.rssi,
+        address=info.address,
+    )
+    if scanned is None or scanned.profile is None:
+        return
+    # scanned.profile is a DeviceProfile enum the library understands.
+```
+
+Connecting uses HA's `async_ble_device_from_address` for both the
+initial `BLEDevice` and for stale-device recovery via
+`ble_device_callback`:
+
+```python
+from homeassistant.components.bluetooth import async_ble_device_from_address
+from tingon_py import TingonDevice
+
+
+device = TingonDevice()
+
+# Stream state changes into the coordinator — consumers read
+# device.appliance_state / device.intimate_status after being notified.
+unregister = device.register_callback(coordinator.async_update_listeners)
+
+await device.connect(
+    ble_device,
+    profile=scanned.profile,
+    disconnected_callback=coordinator.async_set_unavailable,
+    ble_device_callback=lambda: async_ble_device_from_address(
+        hass, address, connectable=True
+    ),
+)
+```
+
+Your `DataUpdateCoordinator.update_method` then just calls
+`device.update()` — for appliances that issues a fresh query and
+populates `device.appliance_state`; intimate devices are push-only, so
+`update()` is a no-op and state is already current from BLE
+notifications. Catch `TingonUnavailableError` from `connect()` /
+`update()` to surface availability cleanly through the coordinator.
+
+---
 
 Capability gating lets you write profile-agnostic code:
 
@@ -77,7 +156,7 @@ from tingon_py import TingonClient, TingonUnsupportedCapability
 from tingon_py.profiles import CAP_CUSTOM
 
 client = TingonClient()
-await client.connect("AA:BB:CC:DD:EE:FF", profile=DeviceProfile.M2)
+await client.connect(ble_device, profile=DeviceProfile.M2)
 
 if client.has_capability(CAP_CUSTOM):
     await client.intimate_set_custom(32, [(1, 10), (2, 20)])

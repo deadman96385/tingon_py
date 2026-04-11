@@ -110,7 +110,12 @@ async def cmd_interactive(args) -> None:
                 if cmd in {"quit", "exit"}:
                     break
                 if cmd == "status":
-                    status = await dev.get_status()
+                    if dev.is_intimate:
+                        status = dev.intimate_status_dict()
+                    else:
+                        await dev.update()
+                        state = dev.appliance_state
+                        status = state.as_dict() if state is not None else None
                     if status:
                         print(format_status(status, dev.profile))
                 elif cmd == "raw" and len(parts) > 1:

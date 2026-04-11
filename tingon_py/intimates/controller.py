@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from ..ble.transport import BleTransport
 from ..ble.uuids import CHR_CMD_NOTIFY, JUNK_DATA
@@ -37,6 +37,30 @@ class IntimateController:
         self._status = IntimateStatus()
         self._response_data: str = ""
         self._response_event = asyncio.Event()
+        self._listeners: list[Callable[[], None]] = []
+
+    # ------------------------------------------------------------------
+    # Listeners
+    # ------------------------------------------------------------------
+
+    def register_listener(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Register a zero-arg listener; returns an unregister function."""
+        self._listeners.append(callback)
+
+        def _unregister() -> None:
+            try:
+                self._listeners.remove(callback)
+            except ValueError:
+                pass
+
+        return _unregister
+
+    def _notify_listeners(self) -> None:
+        for cb in list(self._listeners):
+            try:
+                cb()
+            except Exception:  # pragma: no cover - defensive
+                LOGGER.exception("Intimate state listener raised")
 
     @property
     def profile(self) -> DeviceProfile:
@@ -62,17 +86,23 @@ class IntimateController:
             return
         self._response_data += hex_data
         parsed = IntimateProtocol.parse_notify(hex_data, self._profile)
+        mutated = False
         if "mode" in parsed:
             self._status.mode = parsed["mode"]
             self._status.play = parsed["mode"] != 0
+            mutated = True
         if "motor1" in parsed:
             self._status.motor1 = parsed["motor1"]
             self._status.play = self._status.motor1 > 0 or self._status.motor2 > 0
+            mutated = True
         if "motor2" in parsed:
             self._status.motor2 = parsed["motor2"]
             self._status.play = self._status.motor1 > 0 or self._status.motor2 > 0
+            mutated = True
         if len(data) < 20:
             self._response_event.set()
+        if mutated:
+            self._notify_listeners()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -99,8 +129,14 @@ class IntimateController:
     # Status
     # ------------------------------------------------------------------
 
-    def get_status(self) -> dict:
-        """Return the current locally-tracked status as a plain dict."""
+    def status_dict(self) -> dict:
+        """Return the current locally-tracked status as a plain dict.
+
+        Includes label-mapping for N2 mode and expands custom slots into
+        per-slot keys. This is a *display helper* — there is no BLE
+        round-trip. Consumers that want raw structured access should
+        read :attr:`status` directly.
+        """
         result: dict[str, object] = {
             "play": self._status.play,
             "mode": self._status.mode,
@@ -133,6 +169,7 @@ class IntimateController:
         if not play:
             self._status.mode = 0
             self._status.custom_mode = None
+        self._notify_listeners()
 
     async def set_mode(self, mode: int) -> None:
         self._require_capability(CAP_PRESET_MODE)
@@ -142,6 +179,7 @@ class IntimateController:
         self._status.custom_mode = None
         self._status.motor1 = 0
         self._status.motor2 = 0
+        self._notify_listeners()
 
     async def use_custom(self, slot_id: int) -> None:
         self._require_capability(CAP_CUSTOM)
@@ -153,6 +191,7 @@ class IntimateController:
         self._status.custom_mode = int(slot_id)
         self._status.motor1 = 0
         self._status.motor2 = 0
+        self._notify_listeners()
 
     async def set_output(self, motor1: int, motor2: Optional[int] = None) -> None:
         self._require_capability(CAP_MOTOR1)
@@ -186,6 +225,7 @@ class IntimateController:
         self._status.play = self._status.motor1 > 0 or self._status.motor2 > 0
         self._status.mode = 0
         self._status.custom_mode = None
+        self._notify_listeners()
 
     async def set_position(self, position: str) -> None:
         self._require_capability(CAP_POSITION)
@@ -196,6 +236,7 @@ class IntimateController:
         await self._send_hex(
             IntimateProtocol.encode_position_speed(normalized, self._status.motor1)
         )
+        self._notify_listeners()
 
     async def set_custom_range(self, start: int, end: int) -> None:
         self._require_capability(CAP_CUSTOM_RANGE)
@@ -203,6 +244,7 @@ class IntimateController:
         await self._send_hex(IntimateProtocol.encode_custom_range(normalized_start, normalized_end))
         self._status.range_start = normalized_start
         self._status.range_end = normalized_end
+        self._notify_listeners()
 
     async def set_n2_mode(self, mode_name: str) -> None:
         self._require_capability(CAP_N2_MODE)
@@ -210,6 +252,7 @@ class IntimateController:
         if mode_name not in lookup:
             raise TingonProtocolError(f"Unknown N2 selector '{mode_name}'")
         self._status.n2_mode = lookup[mode_name]
+        self._notify_listeners()
 
     async def query_custom(self, slot_id: int) -> list[dict[str, int]]:
         self._require_capability(CAP_CUSTOM)
@@ -227,6 +270,7 @@ class IntimateController:
             payload_len = int(self._response_data[6:8], 16) * 2
             body = self._response_data[8:8 + payload_len]
             self._status.custom_slots[slot_id] = IntimateProtocol.decode_custom_hex(body)
+            self._notify_listeners()
         return self._status.custom_slots[slot_id]
 
     async def set_custom(self, slot_id: int, items: list[tuple[int, int]]) -> None:
@@ -237,3 +281,4 @@ class IntimateController:
         self._status.custom_slots[slot_id] = [
             {"mode": int(mode), "sec": int(sec)} for mode, sec in items
         ]
+        self._notify_listeners()

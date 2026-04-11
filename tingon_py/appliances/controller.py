@@ -10,11 +10,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from ..ble.transport import BleTransport
 from ..ble.uuids import CHR_CMD_NOTIFY, CHR_QUERY_NOTIFY, JUNK_DATA
 from ..crypto import TingonEncryption
+from ..models import ApplianceState
 from ..profiles import DeviceType
 from .protocol import TingonProtocol
 from .specs import (
@@ -54,6 +55,88 @@ class ApplianceController:
         self._response_event = asyncio.Event()
         self._query_data: str = ""
         self._query_event = asyncio.Event()
+        self._raw_specs: dict[int, Any] = {}
+        self._state: Optional[ApplianceState] = None
+        self._listeners: list[Callable[[], None]] = []
+
+    # ------------------------------------------------------------------
+    # State snapshot & listeners
+    # ------------------------------------------------------------------
+
+    @property
+    def state(self) -> Optional[ApplianceState]:
+        return self._state
+
+    def register_listener(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Register a zero-arg listener; returns an unregister function."""
+        self._listeners.append(callback)
+
+        def _unregister() -> None:
+            try:
+                self._listeners.remove(callback)
+            except ValueError:
+                pass
+
+        return _unregister
+
+    def _notify_listeners(self) -> None:
+        for cb in list(self._listeners):
+            try:
+                cb()
+            except Exception:  # pragma: no cover - defensive
+                LOGGER.exception("Appliance state listener raised")
+
+    def _merge_and_notify(self, raw_update: Optional[dict]) -> Optional[dict]:
+        """Merge a parsed ``{spec_id: value}`` response into cached state."""
+        if not raw_update:
+            return raw_update
+        self._raw_specs.update(raw_update)
+        self._state = self._build_state()
+        self._notify_listeners()
+        return raw_update
+
+    def _build_state(self) -> ApplianceState:
+        specs = self.specs
+        named: dict[str, Any] = {}
+        for spec_id, value in self._raw_specs.items():
+            if spec_id in specs:
+                named[specs[spec_id].name] = value
+            else:
+                named[f"spec_{spec_id}"] = value
+
+        extras = dict(named)
+        power_raw = extras.pop("power", None)
+        target_humidity = extras.pop("target_hum", None)
+        current_humidity = extras.pop("air_intake_hum", None)
+        water_temperature = extras.pop("setting_water_temp", None)
+        bathroom_mode_raw = extras.pop("bathroom_mode", None)
+
+        if self.is_water_heater:
+            error_code = extras.pop("equipment_failure", None)
+            extras.pop("error", None)
+        else:
+            error_code = extras.pop("error", None)
+            extras.pop("equipment_failure", None)
+
+        bathroom_mode: Optional[int] = None
+        if isinstance(bathroom_mode_raw, str):
+            try:
+                bathroom_mode = int(bathroom_mode_raw, 16)
+            except ValueError:
+                extras["bathroom_mode"] = bathroom_mode_raw
+        elif isinstance(bathroom_mode_raw, int):
+            bathroom_mode = bathroom_mode_raw
+
+        return ApplianceState(
+            device_type=self._device_type,
+            power=bool(power_raw) if power_raw is not None else None,
+            target_humidity=int(target_humidity) if target_humidity is not None else None,
+            current_humidity=int(current_humidity) if current_humidity is not None else None,
+            water_temperature=int(water_temperature) if water_temperature is not None else None,
+            bathroom_mode=bathroom_mode,
+            error_code=int(error_code) if error_code is not None else None,
+            extras=extras,
+        )
 
     # ------------------------------------------------------------------
     # Metadata
@@ -142,7 +225,8 @@ class ApplianceController:
             LOGGER.warning("Command response timeout")
             return None
 
-        return TingonProtocol.parse_response(self._response_data, self.signed_specs)
+        parsed = TingonProtocol.parse_response(self._response_data, self.signed_specs)
+        return self._merge_and_notify(parsed)
 
     async def send_multi_command(self, specs: dict) -> Optional[dict]:
         """Send a multi-property command and return parsed response."""
@@ -158,7 +242,8 @@ class ApplianceController:
             LOGGER.warning("Command response timeout")
             return None
 
-        return TingonProtocol.parse_response(self._response_data, self.signed_specs)
+        parsed = TingonProtocol.parse_response(self._response_data, self.signed_specs)
+        return self._merge_and_notify(parsed)
 
     async def send_raw_hex(self, hex_str: str) -> None:
         """Send a raw hex string command."""
@@ -186,22 +271,8 @@ class ApplianceController:
             LOGGER.warning("Query response timeout")
             return None
 
-        return TingonProtocol.parse_response(self._query_data, self.signed_specs)
-
-    async def get_status(self) -> Optional[dict]:
-        """Query all properties and return a human-readable dict with named keys."""
-        raw = await self.query_all()
-        if raw is None:
-            return None
-
-        result: dict[str, object] = {}
-        specs = self.specs
-        for spec_id, value in raw.items():
-            if spec_id in specs:
-                result[specs[spec_id].name] = value
-            else:
-                result[f"spec_{spec_id}"] = value
-        return result
+        parsed = TingonProtocol.parse_response(self._query_data, self.signed_specs)
+        return self._merge_and_notify(parsed)
 
     # ------------------------------------------------------------------
     # Convenience: power (both device types)
