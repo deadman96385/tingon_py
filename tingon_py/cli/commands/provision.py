@@ -6,14 +6,24 @@ import json
 
 from ...appliances.specs import BATHROOM_MODE_NAME_TO_VALUE
 from ...profiles import (
+    CAP_CRUISE_TEMP,
     CAP_CUSTOM,
+    CAP_CUSTOM_RANGE,
+    CAP_DIANDONG,
+    CAP_ECO_CRUISE,
     CAP_HUMIDITY,
     CAP_N2_MODE,
     CAP_POSITION,
+    CAP_SINGLE_CRUISE,
+    CAP_TIMER,
+    CAP_WATER_PRESSURIZATION,
     CAP_WATER_TEMP,
+    CAP_ZERO_COLD_WATER,
+    CAP_ZERO_COLD_WATER_MODE,
 )
 from ..formatters import format_status
 from ._common import add_profile_arg, connect_for_args
+from .appliance import ZERO_COLD_WATER_MODE_VALUES, _parse_timer_entry
 
 
 async def cmd_provision(args) -> None:
@@ -49,9 +59,25 @@ async def cmd_interactive(args) -> None:
             print("  humidity <n>")
             print("  drainage on/off")
             print("  dehum on/off")
+        if dev.has_capability(CAP_TIMER):
+            print("  timer <on|off:hours[:disabled]> ... | timer clear")
         if dev.has_capability(CAP_WATER_TEMP):
             print("  temp <n>")
             print("  mode normal|kitchen|eco|season")
+        if dev.has_capability(CAP_CRUISE_TEMP):
+            print("  cruise_temp <n>")
+        if dev.has_capability(CAP_ZERO_COLD_WATER_MODE):
+            print("  zcw_mode off|on|enhanced")
+        if dev.has_capability(CAP_ECO_CRUISE):
+            print("  eco_cruise on/off")
+        if dev.has_capability(CAP_WATER_PRESSURIZATION):
+            print("  pressurize on/off")
+        if dev.has_capability(CAP_SINGLE_CRUISE):
+            print("  single_cruise on/off")
+        if dev.has_capability(CAP_DIANDONG):
+            print("  jogging on/off")
+        if dev.has_capability(CAP_ZERO_COLD_WATER):
+            print("  zcw on/off")
     else:
         print("  play on/off [mode]")
         print("  mode <n>")
@@ -63,6 +89,9 @@ async def cmd_interactive(args) -> None:
         if dev.has_capability(CAP_CUSTOM):
             print("  custom_get <32|33|34>")
             print("  custom_set <slot> <mode:sec> [mode:sec] ...")
+            print("  custom_use <32|33|34>")
+        if dev.has_capability(CAP_CUSTOM_RANGE):
+            print("  range <start> <end>")
     print("  raw <hex>")
     print("  quit")
     print()
@@ -99,6 +128,30 @@ async def cmd_interactive(args) -> None:
                     print(await dev.set_water_temperature(int(parts[1])))
                 elif dev.is_appliance and cmd == "mode" and len(parts) > 1:
                     print(await dev.set_bathroom_mode(BATHROOM_MODE_NAME_TO_VALUE[parts[1].lower()]))
+                elif dev.is_appliance and cmd == "cruise_temp" and len(parts) > 1:
+                    print(await dev.set_cruise_insulation_temp(int(parts[1])))
+                elif dev.is_appliance and cmd == "zcw_mode" and len(parts) > 1:
+                    mode_val = ZERO_COLD_WATER_MODE_VALUES.get(parts[1].lower())
+                    if mode_val is None:
+                        print("Unknown mode. Use: off, on, enhanced")
+                    else:
+                        print(await dev.set_zero_cold_water_mode(mode_val))
+                elif dev.is_appliance and cmd == "eco_cruise" and len(parts) > 1:
+                    print(await dev.set_eco_cruise(parts[1].lower() == "on"))
+                elif dev.is_appliance and cmd == "pressurize" and len(parts) > 1:
+                    print(await dev.set_water_pressurization(parts[1].lower() == "on"))
+                elif dev.is_appliance and cmd == "single_cruise" and len(parts) > 1:
+                    print(await dev.set_single_cruise(parts[1].lower() == "on"))
+                elif dev.is_appliance and cmd == "jogging" and len(parts) > 1:
+                    print(await dev.set_diandong(parts[1].lower() == "on"))
+                elif dev.is_appliance and cmd == "zcw" and len(parts) > 1:
+                    print(await dev.set_zero_cold_water(parts[1].lower() == "on"))
+                elif dev.is_appliance and cmd == "timer":
+                    if len(parts) > 1 and parts[1].lower() == "clear":
+                        print(await dev.set_timer([]))
+                    else:
+                        entries = [_parse_timer_entry(raw) for raw in parts[1:]]
+                        print(await dev.set_timer(entries))
                 elif dev.is_intimate and cmd == "play" and len(parts) > 1:
                     await dev.intimate_play(parts[1].lower() == "on", int(parts[2]) if len(parts) > 2 else None)
                 elif dev.is_intimate and cmd == "mode" and len(parts) > 1:
@@ -117,6 +170,12 @@ async def cmd_interactive(args) -> None:
                         mode_raw, sec_raw = item.split(":", 1)
                         items.append((int(mode_raw), int(sec_raw)))
                     await dev.intimate_set_custom(int(parts[1]), items)
+                elif dev.is_intimate and cmd == "custom_use" and len(parts) > 1:
+                    await dev.intimate_use_custom(int(parts[1]))
+                    print(f"Activated custom slot {parts[1]}")
+                elif dev.is_intimate and cmd == "range" and len(parts) > 2:
+                    await dev.intimate_set_custom_range(int(parts[1]), int(parts[2]))
+                    print(f"Range set to {parts[1]}-{parts[2]}")
                 else:
                     print(f"Unknown command: {line}")
             except Exception as exc:

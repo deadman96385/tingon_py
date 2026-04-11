@@ -66,6 +66,24 @@ async def cmd_custom_set(args) -> None:
         await dev.disconnect()
 
 
+async def cmd_custom_use(args) -> None:
+    dev = await connect_for_args(args)
+    try:
+        await dev.intimate_use_custom(args.slot)
+        print(f"Activated custom slot {args.slot}")
+    finally:
+        await dev.disconnect()
+
+
+async def cmd_range(args) -> None:
+    dev = await connect_for_args(args)
+    try:
+        await dev.intimate_set_custom_range(args.start, args.end)
+        print(f"Custom range set to {args.start}-{args.end}")
+    finally:
+        await dev.disconnect()
+
+
 def register(subparsers) -> None:
     p_play = subparsers.add_parser("play", help="Start or stop intimate playback")
     p_play.add_argument("address", help="Device BLE address")
@@ -113,3 +131,16 @@ def register(subparsers) -> None:
     p_cset.add_argument("items", nargs="+", help="Sequence of mode:sec pairs")
     add_profile_arg(p_cset)
     p_cset.set_defaults(func=cmd_custom_set)
+
+    p_cuse = subparsers.add_parser("custom-use", help="Activate a saved custom slot")
+    p_cuse.add_argument("address", help="Device BLE address")
+    p_cuse.add_argument("slot", type=int, choices=[32, 33, 34], help="Custom slot ID")
+    add_profile_arg(p_cuse)
+    p_cuse.set_defaults(func=cmd_custom_use)
+
+    p_range = subparsers.add_parser("range", help="Set M2 custom range (0-92)")
+    p_range.add_argument("address", help="Device BLE address")
+    p_range.add_argument("start", type=int, help="Start position 0-92")
+    p_range.add_argument("end", type=int, help="End position 0-92")
+    add_profile_arg(p_range)
+    p_range.set_defaults(func=cmd_range)
