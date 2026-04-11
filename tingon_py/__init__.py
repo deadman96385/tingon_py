@@ -1,5 +1,7 @@
+"""Public API surface for the tingon_py package."""
+
+from .ble.scan import scan
 from .client import TingonClient
-from .core import DeviceProfile, DeviceType, ProfileInfo, ProtocolFamily, ScannedDevice, profile_info
 from .exceptions import (
     TingonConnectionError,
     TingonDependencyError,
@@ -7,7 +9,15 @@ from .exceptions import (
     TingonProtocolError,
     TingonUnsupportedCapability,
 )
-from .scanner import scan
+from .models import ScannedDevice
+from .profiles import (
+    DeviceProfile,
+    DeviceType,
+    ProfileInfo,
+    ProtocolFamily,
+    profile_info,
+)
+
 
 __all__ = [
     "DeviceProfile",

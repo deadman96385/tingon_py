@@ -2,7 +2,7 @@ import unittest
 
 import tingon_py
 from tingon_py import DeviceProfile, TingonClient, TingonProtocolError, TingonUnsupportedCapability
-from tingon_py.core import CAP_WATER_TEMP
+from tingon_py.profiles import CAP_WATER_TEMP
 
 
 class PublicApiTests(unittest.TestCase):

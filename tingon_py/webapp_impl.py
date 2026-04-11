@@ -27,9 +27,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .appliances.specs import BATHROOM_MODE_NAME_TO_VALUE, bathroom_mode_options
+from .ble.scan import scan as ble_scan_devices
 from .client import TingonClient
-from .core import (
-    BATHROOM_MODE_NAME_TO_VALUE,
+from .intimates.protocol import IntimateProtocol
+from .mock.device import MockTingonDevice
+from .mock.scan import mock_scan_devices
+from .models import ScannedDevice
+from .profiles import (
     CAP_BATHROOM_MODE,
     CAP_CUSTOM,
     CAP_CUSTOM_RANGE,
@@ -40,24 +45,18 @@ from .core import (
     CAP_N2_MODE,
     CAP_PLAY,
     CAP_POSITION,
-    CAP_PRESET_MODE,
     CAP_POWER,
+    CAP_PRESET_MODE,
     CAP_STATUS,
     CAP_WATER_TEMP,
     DeviceProfile,
     INTIMATE_PLAYBACK_BEHAVIORS,
-    IntimateProtocol,
-    MockTingonDevice,
     ProtocolFamily,
-    ScannedDevice,
-    bathroom_mode_options,
     intimate_custom_step_limit,
     intimate_mode_count,
     intimate_mode_labels,
-    mock_scan_devices,
     profile_info,
 )
-from .scanner import scan as scan_devices
 
 
 WEB_ROOT = Path(__file__).parent / "web"
@@ -212,7 +211,7 @@ class DeviceSessionManager:
             await asyncio.sleep(min(timeout, 0.35))
             devices = self._mock_scan(name)
         else:
-            devices = await scan_devices(name_filter=name, timeout=timeout)
+            devices = await ble_scan_devices(name_filter=name, timeout=timeout)
         self._scan_cache = {device.address: device for device in devices}
         result = [serialize_scan(device) for device in devices]
         await self._events.broadcast("scan_completed", {"devices": result})

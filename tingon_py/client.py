@@ -1,15 +1,18 @@
+"""Thin public client wrapping the TingonDevice orchestrator."""
+
 from __future__ import annotations
 
 from typing import Optional
 
-from .core import DeviceProfile, DeviceType, ProfileInfo, TingonDevice
-from .scanner import scan as scan_devices
+from .ble.scan import scan as scan_devices
+from .device import TingonDevice
+from .profiles import DeviceProfile, DeviceType, ProfileInfo
 
 
 class TingonClient:
     """Canonical async client for TINGON BLE devices."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._device = TingonDevice()
 
     @property
@@ -31,7 +34,7 @@ class TingonClient:
     def has_capability(self, capability: str) -> bool:
         return self._device.has_capability(capability)
 
-    def require_capability(self, capability: str):
+    def require_capability(self, capability: str) -> None:
         self._device.require_capability(capability)
 
     async def connect(
@@ -39,10 +42,10 @@ class TingonClient:
         address: str,
         device_type: Optional[DeviceType] = None,
         profile: Optional[DeviceProfile] = None,
-    ):
+    ) -> None:
         await self._device.connect(address, device_type=device_type, profile=profile)
 
-    async def disconnect(self):
+    async def disconnect(self) -> None:
         await self._device.disconnect()
 
     async def get_status(self):
@@ -93,10 +96,18 @@ class TingonClient:
     async def intimate_set_custom(self, slot_id: int, items: list[tuple[int, int]]):
         await self._device.intimate_set_custom(slot_id, items)
 
-    async def provision_wifi(self, ssid: str, password: str, config_url: str = "", encrypt: bool = True):
-        return await self._device.provision_wifi(ssid, password, config_url=config_url, encrypt=encrypt)
+    async def provision_wifi(
+        self,
+        ssid: str,
+        password: str,
+        config_url: str = "",
+        encrypt: bool = True,
+    ):
+        return await self._device.provision_wifi(
+            ssid, password, config_url=config_url, encrypt=encrypt
+        )
 
-    async def send_raw_hex(self, hex_str: str):
+    async def send_raw_hex(self, hex_str: str) -> None:
         await self._device.send_raw_hex(hex_str)
 
     @staticmethod

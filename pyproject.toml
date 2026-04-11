@@ -27,15 +27,15 @@ web = [
 ]
 
 [project.scripts]
-tingon = "tingon_py.cli:main"
+tingon = "tingon_py.cli.main:main"
 tingon-web = "tingon_py.webapp:main"
 
 [project.urls]
 Homepage = "https://github.com/deadman96385/tingon_py"
 Repository = "https://github.com/deadman96385/tingon_py"
 
-[tool.setuptools]
-packages = ["tingon_py"]
+[tool.setuptools.packages.find]
+include = ["tingon_py", "tingon_py.*"]
 
 [tool.setuptools.package-data]
 tingon_py = ["web/*", "web/assets/*"]
