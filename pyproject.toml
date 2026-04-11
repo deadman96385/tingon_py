@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tingon-py"
-version = "1.1.0"
+version = "1.2.0"
 description = "Python tooling for TINGON BLE appliance and intimate devices"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
   "bleak",
+  "bleak-retry-connector>=3.5",
+  "async-interrupt>=1.1",
 ]
 classifiers = [
   "License :: OSI Approved :: MIT License",
